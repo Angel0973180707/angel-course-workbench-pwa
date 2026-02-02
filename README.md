@@ -1,19 +1,27 @@
-# Angel Course Design Workbench (PWA)
+# Angel Course Workbench (GitHub Pages)
 
-- Course Design Workbench: Idea / Draft / Final (wizard)
-- Tool Library: add/edit/delete (local) + sync from API (read)
-- Tool Picker: main tool (single) + secondary tools (multi)
-- One-click copy: AI prompt (ChatGPT/Gemini) + TSV row (per state)
-- localStorage drafts + JSON backup export
-- Green theme (幸福教養)
+## Files
+- index.html
+- styles.css
+- app.js
+- manifest.json
+- sw.js
+- assets/icons/icon-192.png
+- assets/icons/icon-512.png
 
-## Deploy
-Upload everything to a GitHub Pages repo root, then enable Pages.
+## Deploy (GitHub Pages)
+1. Upload all files to your repo root
+2. Settings → Pages → Deploy from branch (main / root)
+3. Open the Pages URL
 
-## APIs
-Set in Settings:
-- Course API (final list sync)
-- Tools API (tools sync)
-- Optional token
+## API Settings
+Open the app → 「設定」:
+- Tools API: 工具庫存管理 Web app URL
+- Course API: 幸福教養課程管理 Web app URL
 
-This app is designed to still work even if write APIs are not available.
+> GAS 建議：Execute as = Me, Who has access = Anyone
+
+## Sheet tab names (must match exactly)
+- 幸福教養課程管理
+- 草稿
+- 發想
