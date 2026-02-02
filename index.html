@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Angel｜課程設計工作台</title>
+  <meta name="theme-color" content="#2f6b57" />
+  <meta name="description" content="課程設計工作台（發想/草稿/完稿）＋工具庫管理＋一鍵複製 AI 指令＋一鍵輸出 TSV" />
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./assets/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="topbar">
+    <div class="app">
+      <div class="brand">
+        <div class="brand-left">
+          <div class="logo">A</div>
+          <div class="hgroup">
+            <h1>Angel｜課程設計工作台</h1>
+            <p>發想 → 草稿 → 完稿｜工具庫可增刪｜一鍵複製 AI 指令｜TSV 一列輸出</p>
+          </div>
+        </div>
+        <div class="brand-right">
+          <button class="btn small" id="btn-settings">設定</button>
+        </div>
+      </div>
+
+      <div class="nav" role="tablist" aria-label="Main">
+        <button class="tab active" data-page="workbench">課程設計工作台</button>
+        <button class="tab" data-page="tools">工具庫管理</button>
+        <button class="tab" data-page="final">完稿課程清單</button>
+      </div>
+    </div>
+  </div>
+
+  <main class="app">
+    <!-- PAGE: WORKBENCH -->
+    <section id="page-workbench" class="page">
+      <div class="section-title">
+        <h2>狀態流</h2>
+        <div class="right">
+          <span class="badge" id="badge-idea">⬜ 發想</span>
+          <span class="badge" id="badge-draft">⬜ 草稿</span>
+          <span class="badge" id="badge-final">⬜ 完稿</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>目前狀態</label>
+            <select id="state-select">
+              <option value="idea">發想（Idea）</option>
+              <option value="draft">草稿（Draft）</option>
+              <option value="final">完稿（Final）</option>
+            </select>
+            <small class="muted">同一頁完成三狀態。你切到哪一段，底部的「AI 指令」與「TSV 一列」會跟著切換。</small>
+          </div>
+          <div>
+            <label>課程類型（type）</label>
+            <select id="type-select">
+              <option value="演講">演講</option>
+              <option value="現場課程">現場課程</option>
+              <option value="線上課程">線上課程</option>
+              <option value="活動">活動</option>
+              <option value="備份">備份</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-title">
+        <h2>四步驟 Wizard</h2>
+        <div class="right">
+          <span class="muted">進度：</span>
+          <span class="pill" id="pill-s1">1</span>
+          <span class="pill" id="pill-s2">2</span>
+          <span class="pill" id="pill-s3">3</span>
+          <span class="pill" id="pill-s4">4</span>
+        </div>
+      </div>
+
+      <div class="wizard" id="wizard-cards">
+        <!-- injected -->
+      </div>
+
+      <div style="height:8px"></div>
+      <div class="card">
+        <div class="section-title" style="margin:0 0 8px">
+          <h2>本機草稿</h2>
+          <div class="right">
+            <button class="btn small" id="btn-reset-draft">重置這份草稿</button>
+          </div>
+        </div>
+        <small class="muted">
+          你可以把這份草稿當「心先站穩」的容器：不用完美、不用一次做完。任何時候停下來，都可以。
+        </small>
+      </div>
+    </section>
+
+    <!-- PAGE: TOOLS -->
+    <section id="page-tools" class="page" style="display:none">
+      <div class="section-title">
+        <h2>工具庫管理</h2>
+        <div class="right">
+          <button class="btn primary small" id="btn-tool-add">新增工具</button>
+          <button class="btn small" id="btn-tool-sync">同步 API</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>搜尋 / prefix（例如：EQ、MIX、COM）</label>
+            <input id="tool-search" placeholder="輸入關鍵字或 prefix..." />
+          </div>
+          <div>
+            <label>分類（category）</label>
+            <select id="tool-category-filter">
+              <option value="">全部</option>
+            </select>
+          </div>
+        </div>
+        <small class="muted">工具資料：以工具庫 API 為主；若 API 暫時不可用，會用本機快取備援。</small>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div class="card">
+        <table class="table" id="tools-table">
+          <thead>
+            <tr>
+              <th style="width:130px">toolCode</th>
+              <th>工具名稱 / 連結</th>
+              <th style="width:160px">category</th>
+              <th style="width:160px">status</th>
+              <th style="width:120px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div style="height:8px"></div>
+      <div class="card">
+        <small class="muted">
+          設計課程時會跳出「工具勾選視窗」：主工具單選、副工具多選。勾好後會自動整理 links 欄位。
+        </small>
+      </div>
+    </section>
+
+    <!-- PAGE: FINAL LIST -->
+    <section id="page-final" class="page" style="display:none">
+      <div class="section-title">
+        <h2>完稿課程清單</h2>
+        <div class="right">
+          <button class="btn small" id="btn-final-sync">同步課程 API</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>搜尋（title / tags / audience）</label>
+            <input id="final-search" placeholder="輸入關鍵字..." />
+          </div>
+          <div>
+            <label>狀態（status）</label>
+            <select id="final-status-filter">
+              <option value="">全部</option>
+              <option value="ready">ready</option>
+              <option value="archived">archived</option>
+              <option value="paused">paused</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div class="card">
+        <table class="table" id="final-table">
+          <thead>
+            <tr>
+              <th style="width:120px">id</th>
+              <th>title</th>
+              <th style="width:120px">type</th>
+              <th style="width:120px">status</th>
+              <th style="width:120px">version</th>
+              <th style="width:120px">操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <small class="muted">這裡是「正式成品」清單，不混草稿。完稿狀態預設 ready（最保守）。</small>
+      </div>
+    </section>
+  </main>
+
+  <!-- Fixed bottom output -->
+  <div class="fixed-bottom">
+    <div class="fixed-inner">
+      <div class="left">
+        <button class="btn primary" id="btn-copy-ai">一鍵複製｜AI 指令</button>
+        <button class="btn" id="btn-copy-tsv">一鍵複製｜TSV 一列（本狀態）</button>
+      </div>
+      <div class="right">
+        <button class="btn" id="btn-save-local">存本機草稿</button>
+        <button class="btn" id="btn-export-json">匯出 JSON（備份）</button>
+        <span class="muted">狀態：<span class="kbd" id="state-label">發想</span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <!-- Modal: settings -->
+  <div class="modal-backdrop" id="modal-settings">
+    <div class="modal">
+      <header>
+        <h3>設定</h3>
+        <div class="actions">
+          <button class="btn small" data-close="modal-settings">關閉</button>
+        </div>
+      </header>
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>幸福教養課程管理 API（course）</label>
+            <input id="api-course" />
+          </div>
+          <div>
+            <label>工具庫管理 API（tools）</label>
+            <input id="api-tools" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>Token（若你的 GAS 有啟用 token 才需要）</label>
+            <input id="api-token" placeholder="可留空" />
+          </div>
+          <div>
+            <label>owner（預設填入 TSV）</label>
+            <input id="owner" placeholder="例如：天使笑長" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>episodes（集數）</label>
+            <input id="episodes" placeholder="例如：8" />
+          </div>
+          <div>
+            <label>capacity（人數）</label>
+            <input id="capacity" placeholder="例如：20" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>duration_min（分鐘）</label>
+            <input id="duration" placeholder="例如：120" />
+          </div>
+          <div>
+            <label>version（預設版本）</label>
+            <input id="default-version" placeholder="例如：v1.0" />
+          </div>
+        </div>
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px">
+          <button class="btn primary" id="btn-save-settings">保存設定</button>
+          <button class="btn" id="btn-clear-cache">清掉本機快取</button>
+        </div>
+        <small class="muted">提示：GitHub Pages 上執行，請確保 API 允許跨域（GAS Web App 通常沒問題）。</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: tool picker -->
+  <div class="modal-backdrop" id="modal-tool-picker">
+    <div class="modal">
+      <header>
+        <h3>選工具（主工具單選 / 副工具多選）</h3>
+        <div class="actions">
+          <button class="btn small" id="btn-tool-picker-done">完成套用</button>
+          <button class="btn small" data-close="modal-tool-picker">取消</button>
+        </div>
+      </header>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>搜尋 / prefix</label>
+            <input id="picker-search" placeholder="例如：EQ-02 或 五感 或 反應..." />
+          </div>
+          <div>
+            <label>分類</label>
+            <select id="picker-category">
+              <option value="">全部</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label>主工具（單選）</label>
+            <div id="picker-main" class="pills"></div>
+          </div>
+          <div>
+            <label>副工具（多選）</label>
+            <div id="picker-secondary" class="pills"></div>
+          </div>
+        </div>
+        <small class="muted">勾選後會自動整理 links 欄位：主工具＋副工具（含連結）。</small>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div class="card">
+        <table class="table" id="picker-table">
+          <thead>
+            <tr>
+              <th style="width:110px">主</th>
+              <th style="width:110px">副</th>
+              <th style="width:130px">toolCode</th>
+              <th>title / tips</th>
+              <th style="width:160px">category</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: tool editor -->
+  <div class="modal-backdrop" id="modal-tool-editor">
+    <div class="modal">
+      <header>
+        <h3 id="tool-editor-title">新增工具</h3>
+        <div class="actions">
+          <button class="btn small" data-close="modal-tool-editor">關閉</button>
+        </div>
+      </header>
+
+      <div class="card">
+        <div class="row">
+          <div>
+            <label>toolCode（例如：EQ-02）</label>
+            <input id="toolCode" />
+          </div>
+          <div>
+            <label>status</label>
+            <select id="toolStatus">
+              <option value="active">active</option>
+              <option value="draft">draft</option>
+              <option value="archived">archived</option>
+            </select>
+          </div>
+        </div>
+        <label>工具名稱（title）</label>
+        <input id="toolTitle" />
+        <div class="row">
+          <div>
+            <label>category</label>
+            <input id="toolCategory" placeholder="例如：EQ / COM / MIX / REL..." />
+          </div>
+          <div>
+            <label>link</label>
+            <input id="toolLink" placeholder="https://..." />
+          </div>
+        </div>
+        <label>核心功能（summary）</label>
+        <textarea id="toolSummary"></textarea>
+        <label>操作步驟（steps）</label>
+        <textarea id="toolSteps"></textarea>
+        <label>tips（錦囊一句）</label>
+        <input id="toolTips" placeholder="例如：親愛的，先把心站穩..." />
+
+        <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px">
+          <button class="btn primary" id="btn-tool-save">保存（本機）</button>
+          <button class="btn" id="btn-tool-delete">刪除（本機）</button>
+          <button class="btn small" id="btn-tool-push-api">嘗試同步到 API</button>
+        </div>
+        <small class="muted">為了「一定可用」，本 PWA 以本機可增刪為底；若你的工具庫 API 有支援寫入，按「同步到 API」即可。</small>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>
