@@ -5,35 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#0f3b2e" />
   <title>Angel｜課程設計工作台</title>
-
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./assets/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
-
   <link rel="stylesheet" href="./style.css" />
 </head>
-
 <body>
   <header class="topbar">
     <div class="brand">
       <div class="logo">A</div>
       <div class="brand-text">
         <div class="brand-title">Angel｜課程設計工作台</div>
-        <div class="brand-sub">發想 → 草稿 → 完稿｜一鍵複製 AI 指令｜TSV 一列輸出</div>
+        <div class="brand-sub">發想 → 草稿 → 完稿｜不遮罩・可滑動・穩穩做</div>
       </div>
     </div>
-
     <button id="btnSettings" class="btn ghost">設定</button>
   </header>
 
   <main class="container">
-    <section class="tabs">
-      <button class="tab active" data-tab="workbench">課程設計工作台</button>
-      <button class="tab" data-tab="tools" disabled title="下一步會加入">工具庫管理（下一步）</button>
-      <button class="tab" data-tab="finalList" disabled title="下一步會加入">完稿課程清單（下一步）</button>
-    </section>
-
-    <!-- Progress -->
     <section class="card">
       <div class="card-hd">
         <div class="hd-title">狀態進度</div>
@@ -52,49 +41,18 @@
       </div>
     </section>
 
-    <!-- Workbench -->
-    <section id="panelWorkbench" class="panel active">
-      <section class="wizard">
-        <div class="wizard-hd">
-          <h2>四步驟 Wizard</h2>
-          <div class="mini">每一步都可展開收合；不跳頁、不遮罩、不會卡住。</div>
-        </div>
-
-        <!-- Step cards -->
-        <div id="stepsArea" class="steps"></div>
-      </section>
-
-      <!-- Spacer so sticky bar won't cover content -->
-      <div class="bottom-safe"></div>
-    </section>
-
-    <!-- Placeholder panels -->
-    <section id="panelTools" class="panel">
-      <div class="card">
-        <div class="card-hd">
-          <div class="hd-title">工具庫管理</div>
-          <div class="hd-note">下一步（2-2）再加：可增刪＋課程內勾選主/副工具（不遮罩版本）</div>
-        </div>
-        <div class="card-bd">
-          <p class="mini">先把課程工作台穩穩做完，我們再把工具庫接上兩個 API。</p>
-        </div>
+    <section class="wizard">
+      <div class="wizard-hd">
+        <h2>四步驟 Wizard</h2>
+        <div class="mini">每一步都可展開收合；不跳頁、不遮罩、不會卡住。</div>
       </div>
+
+      <div id="stepsArea" class="steps"></div>
     </section>
 
-    <section id="panelFinalList" class="panel">
-      <div class="card">
-        <div class="card-hd">
-          <div class="hd-title">完稿課程清單</div>
-          <div class="hd-note">下一步會加入：讀取你的「課程管理 API」顯示 ready 成品</div>
-        </div>
-        <div class="card-bd">
-          <p class="mini">等 Wizard 的資料完整，我們再把 Final 清單接上 API。</p>
-        </div>
-      </div>
-    </section>
+    <div class="bottom-safe"></div>
   </main>
 
-  <!-- Sticky Output Bar (NO mask, NO modal) -->
   <footer class="sticky">
     <div class="sticky-inner">
       <button id="btnCopyAI" class="btn primary">一鍵複製｜AI 指令</button>
@@ -109,5 +67,10 @@
   </footer>
 
   <script src="./app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+    }
+  </script>
 </body>
 </html>
