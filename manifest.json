@@ -1,10 +1,10 @@
 {
   "name": "Angel｜課程設計工作台",
-  "short_name": "Angel課程台",
+  "short_name": "Angel課程",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#eaf3ef",
-  "theme_color": "#165a4a",
+  "background_color": "#e9f2ee",
+  "theme_color": "#0f3b2e",
   "icons": [
     {
       "src": "./assets/icons/icon-192.png",

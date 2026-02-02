@@ -1,217 +1,147 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f3b2e" />
   <title>Angel｜課程設計工作台</title>
-  <meta name="theme-color" content="#165a4a" />
-  <meta name="description" content="發想→草稿→完稿｜工具庫存管理｜一鍵複製 AI 指令｜TSV 一列輸出" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="icon" href="./assets/icons/icon-192.png" />
   <link rel="apple-touch-icon" href="./assets/icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="./style.css" />
 </head>
 <body>
-  <div class="app">
-    <header class="topbar">
-      <div class="brand">
-        <div class="logo">A</div>
-        <div class="title">
-          <div class="h1">Angel｜課程設計工作台</div>
-          <div class="sub">發想 → 草稿 → 完稿｜工具庫可增刪｜一鍵複製 AI 指令｜TSV 一列輸出</div>
-        </div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">A</div>
+      <div class="brand-text">
+        <div class="brand-title">Angel｜課程設計工作台</div>
+        <div class="brand-sub">Step 2-3｜AI 指令完整＋接通課程管理 API（不遮罩）</div>
       </div>
-      <button class="btn ghost" id="btnSettings">設定</button>
-    </header>
+    </div>
+    <div class="top-actions">
+      <button id="btnReloadTools" class="btn ghost">同步工具庫</button>
+      <button id="btnToggleSettings" class="btn ghost">設定</button>
+    </div>
+  </header>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="workbench">課程設計工作台</button>
-      <button class="tab" data-tab="tools">工具庫存管理</button>
-      <button class="tab" data-tab="finalList">完稿課程清單</button>
-    </nav>
+  <main class="container">
+    <section class="card">
+      <div class="card-hd">
+        <div class="hd-title">狀態進度</div>
+        <div class="hd-note">發想 → 草稿 → 完稿｜按狀態輸出 AI 指令與 TSV，並可送進試算表</div>
+      </div>
+      <div class="progress">
+        <button class="pill" data-state="idea"><span class="dot" id="dotIdea"></span>發想</button>
+        <button class="pill" data-state="draft"><span class="dot" id="dotDraft"></span>草稿</button>
+        <button class="pill" data-state="final"><span class="dot" id="dotFinal"></span>完稿</button>
+      </div>
+      <div class="statusline">
+        <div>目前狀態：<span id="stateLabel" class="badge">發想</span></div>
+        <div class="mini" id="apiHint"></div>
+      </div>
+    </section>
 
-    <main class="main">
-      <!-- Workbench -->
-      <section class="panel active" id="tab-workbench">
-        <div class="card">
-          <div class="cardTitle">狀態進度</div>
-          <div class="statusBar">
-            <button class="pill active" data-state="idea">① 發想</button>
-            <button class="pill" data-state="draft">② 草稿</button>
-            <button class="pill" data-state="final">③ 完稿</button>
+    <section id="settingsCard" class="card" style="display:none">
+      <div class="card-hd">
+        <div class="hd-title">設定</div>
+        <div class="hd-note">這裡只放「會用到」的最少設定，避免複雜</div>
+      </div>
+      <div class="card-bd">
+        <div class="grid two">
+          <div class="field">
+            <label>owner（可先空白）</label>
+            <input id="f_owner" placeholder="例如：天使笑長 / 你自己的名字" />
           </div>
-          <div class="hint">提示：先在「發想」填完 I-1～I-4，再按「進草稿」。</div>
-        </div>
-
-        <div class="grid2">
-          <div class="card">
-            <div class="cardTitle">I-1｜一句話定義</div>
-            <label>課名 title</label>
-            <input id="f_title" placeholder="例如：給親子的｜幸福教養體驗活動" />
-            <label>對象 audience</label>
-            <input id="f_audience" placeholder="例如：親子／家長／老師" />
-            <label>標籤 tags（用空格或 # 分隔）</label>
-            <input id="f_tags" placeholder="#情緒急救 #關係修復 #不打不罵" />
-          </div>
-
-          <div class="card">
-            <div class="cardTitle">I-2｜結果感（結尾一句話）</div>
-            <label>closing_line</label>
-            <textarea id="f_closing" rows="4" placeholder="例如：孩子不需要你完美，他需要你回得來。"></textarea>
-          </div>
-
-          <div class="card">
-            <div class="cardTitle">I-3｜工具配方（從工具庫存管理勾選）</div>
-            <div class="row">
-              <button class="btn" id="btnPickMain">選主工具（單選）</button>
-              <button class="btn" id="btnPickSide">選副工具（多選）</button>
-            </div>
-            <div class="mini">
-              <div><b>主工具：</b><span id="mainToolView">（尚未選）</span></div>
-              <div class="mt8"><b>副工具：</b><span id="sideToolView">（尚未選）</span></div>
-            </div>
-            <div class="mt8 hint">若清單空白：到「工具庫存管理」按「同步工具庫」。</div>
-          </div>
-
-          <div class="card">
-            <div class="cardTitle">I-4｜粗架構（8 集一句話）</div>
-            <label>framework_text</label>
-            <textarea id="f_framework" rows="8" placeholder="用 1～8 行寫八集一句話大綱"></textarea>
-            <div class="row mt8">
-              <button class="btn primary" id="btnToDraft">進草稿 →</button>
-              <button class="btn ghost" id="btnResetIdea">清空發想欄位</button>
-            </div>
+          <div class="field">
+            <label>version</label>
+            <input id="f_version" placeholder="例如 v1 / v1.1" />
           </div>
         </div>
-
-        <div class="stickyBottom">
-          <button class="btn primary" id="btnCopyAI">一鍵複製｜AI 指令</button>
-          <button class="btn" id="btnCopyTSV">一鍵複製｜TSV 一列（本狀態）</button>
-          <button class="btn" id="btnSaveLocal">存本機草稿</button>
-          <button class="btn" id="btnExportJSON">匯出 JSON（備份）</button>
-          <div class="footerLine">
-            狀態：<span class="badge" id="stateBadge">發想</span>
-            <span class="muted" id="smallStatus"></span>
-          </div>
-        </div>
-      </section>
-
-      <!-- Tools -->
-      <section class="panel" id="tab-tools">
-        <div class="card">
-          <div class="cardTitle">工具庫存管理</div>
-          <div class="row">
-            <button class="btn primary" id="btnSyncTools">同步工具庫（API）</button>
-            <button class="btn" id="btnOpenDebug">查看 API 原始回應</button>
-            <button class="btn" id="btnOpenImport">手動匯入 TSV</button>
-            <span class="muted" id="toolsCount">（尚未同步）</span>
-          </div>
-          <div class="hint">如果同步後仍顯示 0 筆：請點「查看 API 原始回應」截圖給我。</div>
-        </div>
-
-        <div class="card">
-          <div class="cardTitle">搜尋/篩選</div>
-          <div class="row">
-            <input id="toolSearch" placeholder="搜尋：MIX-01 / 五感覺察 / 情緒急救…" />
-            <select id="toolPrefix">
-              <option value="">全部前綴</option>
-              <option value="MIX">MIX</option>
-              <option value="EQ">EQ</option>
-              <option value="COM">COM</option>
-              <option value="ACT">ACT</option>
-              <option value="REL">REL</option>
-              <option value="KIDS">KIDS</option>
-            </select>
-            <select id="toolCategory">
-              <option value="">全部分類</option>
+        <div class="grid two">
+          <div class="field">
+            <label>course_kind（形式）</label>
+            <select id="f_kind">
+              <option value="module">模組課程</option>
+              <option value="lecture">演講</option>
+              <option value="class">單場課程</option>
+              <option value="activity">單場活動</option>
             </select>
           </div>
+          <div class="field">
+            <label>type（類型/平台）</label>
+            <input id="f_type" placeholder="現場 / 線上 / 校園 / 親子活動…" />
+          </div>
         </div>
-
-        <div class="list" id="toolsList"></div>
-      </section>
-
-      <!-- Final list -->
-      <section class="panel" id="tab-finalList">
-        <div class="card">
-          <div class="cardTitle">完稿課程清單</div>
-          <div class="hint">目前先保留版位；下一步會接「幸福教養課程管理 API」拉 final 表清單。</div>
+        <div class="grid two">
+          <div class="field">
+            <label>sessions_count（場次/單元）</label>
+            <input id="f_sessions" placeholder="8（單場填 1）" />
+          </div>
+          <div class="field">
+            <label>duration_min（單場分鐘）</label>
+            <input id="f_duration" placeholder="120" />
+          </div>
         </div>
-      </section>
-    </main>
-  </div>
-
-  <!-- Picker Modal -->
-  <div class="modalWrap hidden" id="pickerModal">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle" id="pickerTitle">選工具</div>
-        <button class="btn ghost" id="pickerClose">關閉</button>
-      </div>
-      <div class="modalBody">
-        <div class="row">
-          <input id="pickerSearch" placeholder="搜尋工具…" />
-          <select id="pickerPrefix">
-            <option value="">全部前綴</option>
-            <option value="MIX">MIX</option>
-            <option value="EQ">EQ</option>
-            <option value="COM">COM</option>
-            <option value="ACT">ACT</option>
-            <option value="REL">REL</option>
-            <option value="KIDS">KIDS</option>
-          </select>
-          <select id="pickerCategory">
-            <option value="">全部分類</option>
-          </select>
+        <div class="grid two">
+          <div class="field">
+            <label>days（天數）</label>
+            <input id="f_days" placeholder="1" />
+          </div>
+          <div class="field">
+            <label>hours_total（總時數）</label>
+            <input id="f_hours" placeholder="2" />
+          </div>
         </div>
-        <div class="pickerList" id="pickerList"></div>
-      </div>
-      <div class="modalFoot">
-        <button class="btn primary" id="pickerConfirm">確定</button>
-      </div>
-    </div>
-  </div>
+        <div class="grid two">
+          <div class="field">
+            <label>capacity（人數）</label>
+            <input id="f_capacity" placeholder="20" />
+          </div>
+          <div class="field">
+            <label>從後臺載入（本狀態清單）</label>
+            <button id="btnLoadFromApi" class="btn">載入清單</button>
+          </div>
+        </div>
+        <div id="apiListArea" class="api-list" style="margin-top:10px;"></div>
 
-  <!-- Debug Modal -->
-  <div class="modalWrap hidden" id="debugModal">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle">API 原始回應（工具庫）</div>
-        <button class="btn ghost" id="debugClose">關閉</button>
+        <div class="hint">
+          <div><b>工具庫 API</b>（讀）：<span class="mono" id="toolApiLabel"></span></div>
+          <div><b>課程管理 API</b>（寫）：<span class="mono" id="courseApiLabel"></span></div>
+          <div class="mini">送出若失敗：仍可用「TSV 一列」貼回試算表（最保守備援）。</div>
+        </div>
       </div>
-      <div class="modalBody">
-        <div class="hint">把這段截圖/複製給我，我就能精準修 API 或解析。</div>
-        <textarea id="debugText" rows="14" spellcheck="false"></textarea>
-      </div>
-      <div class="modalFoot">
-        <button class="btn" id="debugCopy">複製內容</button>
-      </div>
-    </div>
-  </div>
+    </section>
 
-  <!-- Import TSV Modal -->
-  <div class="modalWrap hidden" id="importModal">
-    <div class="modal">
-      <div class="modalHead">
-        <div class="modalTitle">手動匯入 TSV（工具庫）</div>
-        <button class="btn ghost" id="importClose">關閉</button>
+    <section class="wizard">
+      <div class="wizard-hd">
+        <h2>四步驟 Wizard</h2>
+        <div class="mini">I-3：工具庫勾選（主工具單選 / 副工具多選）＋自動整理 links</div>
       </div>
-      <div class="modalBody">
-        <div class="hint">把你試算表那一整段 TSV 貼進來（含表頭 toolCode / name / …）。</div>
-        <textarea id="importText" rows="12" spellcheck="false" placeholder="貼上 TSV…"></textarea>
-      </div>
-      <div class="modalFoot">
-        <button class="btn primary" id="importApply">匯入並存到本機</button>
-      </div>
+      <div id="stepsArea" class="steps"></div>
+    </section>
+
+    <div class="bottom-safe"></div>
+  </main>
+
+  <footer class="sticky">
+    <div class="sticky-inner">
+      <button id="btnCopyAI" class="btn primary">一鍵複製｜AI 指令（完整）</button>
+      <button id="btnCopyTSV" class="btn">一鍵複製｜TSV 一列</button>
+      <button id="btnSendApi" class="btn">送出｜寫入試算表（本狀態）</button>
+      <button id="btnSaveLocal" class="btn">存本機草稿</button>
+      <button id="btnExportJson" class="btn">匯出 JSON</button>
     </div>
-  </div>
+    <div class="sticky-meta">
+      <span>狀態：<b id="stateLabelBottom">發想</b></span>
+      <span class="mini" id="toast"></span>
+    </div>
+  </footer>
 
   <script src="./app.js"></script>
   <script>
-    if ("serviceWorker" in navigator) {
-      window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(()=>{});
-      });
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
     }
   </script>
 </body>
