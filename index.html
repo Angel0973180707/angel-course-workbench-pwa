@@ -16,17 +16,20 @@
       <div class="logo">A</div>
       <div class="brand-text">
         <div class="brand-title">Angel｜課程設計工作台</div>
-        <div class="brand-sub">Step 2-2｜工具庫勾選（頁內、無遮罩）</div>
+        <div class="brand-sub">Step 2-3｜AI 指令完整＋接通課程管理 API（不遮罩）</div>
       </div>
     </div>
-    <button id="btnReloadTools" class="btn ghost">同步工具庫</button>
+    <div class="top-actions">
+      <button id="btnReloadTools" class="btn ghost">同步工具庫</button>
+      <button id="btnToggleSettings" class="btn ghost">設定</button>
+    </div>
   </header>
 
   <main class="container">
     <section class="card">
       <div class="card-hd">
         <div class="hd-title">狀態進度</div>
-        <div class="hd-note">發想 → 草稿 → 完稿</div>
+        <div class="hd-note">發想 → 草稿 → 完稿｜按狀態輸出 AI 指令與 TSV，並可送進試算表</div>
       </div>
       <div class="progress">
         <button class="pill" data-state="idea"><span class="dot" id="dotIdea"></span>發想</button>
@@ -35,13 +38,59 @@
       </div>
       <div class="statusline">
         <div>目前狀態：<span id="stateLabel" class="badge">發想</span></div>
+        <div class="mini" id="apiHint"></div>
+      </div>
+    </section>
+
+    <section id="settingsCard" class="card" style="display:none">
+      <div class="card-hd">
+        <div class="hd-title">設定</div>
+        <div class="hd-note">這裡只放「會用到」的最少設定，避免複雜</div>
+      </div>
+      <div class="card-bd">
+        <div class="grid two">
+          <div class="field">
+            <label>owner（可先空白）</label>
+            <input id="f_owner" placeholder="例如：天使笑長 / 你自己的名字" />
+          </div>
+          <div class="field">
+            <label>version</label>
+            <input id="f_version" placeholder="例如 v1 / v1.1" />
+          </div>
+        </div>
+        <div class="grid two">
+          <div class="field">
+            <label>episodes（集數）</label>
+            <input id="f_episodes" placeholder="8" />
+          </div>
+          <div class="field">
+            <label>duration_min（分鐘）</label>
+            <input id="f_duration" placeholder="120" />
+          </div>
+        </div>
+        <div class="grid two">
+          <div class="field">
+            <label>capacity（人數）</label>
+            <input id="f_capacity" placeholder="20" />
+          </div>
+          <div class="field">
+            <label>type（類型）</label>
+            <input id="f_type" placeholder="活動 / 現場課程 / 線上課程 / 演講" />
+          </div>
+        </div>
+
+        <div class="hint">
+          <div><b>工具庫 API</b>（讀）：<span class="mono" id="toolApiLabel"></span></div>
+          <div><b>課程管理 API</b>（寫）：<span class="mono" id="courseApiLabel"></span></div>
+          <div class="mini">送出若失敗：仍可用「TSV 一列」貼回試算表（最保守備援）。</div>
+        </div>
       </div>
     </section>
 
     <section class="wizard">
       <div class="wizard-hd">
         <h2>四步驟 Wizard</h2>
-        <div class="mini">I-3 已接上「工具庫 API」，可搜尋/篩選/勾選</div>
+        <div class="mini">I-3：工具庫勾選（主工具單選 / 副工具多選）＋自動整理 links</div>
       </div>
       <div id="stepsArea" class="steps"></div>
     </section>
@@ -51,17 +100,23 @@
 
   <footer class="sticky">
     <div class="sticky-inner">
-      <button id="btnCopyAI" class="btn primary">一鍵複製｜AI 指令</button>
+      <button id="btnCopyAI" class="btn primary">一鍵複製｜AI 指令（完整）</button>
       <button id="btnCopyTSV" class="btn">一鍵複製｜TSV 一列</button>
+      <button id="btnSendApi" class="btn">送出｜寫入試算表（本狀態）</button>
       <button id="btnSaveLocal" class="btn">存本機草稿</button>
       <button id="btnExportJson" class="btn">匯出 JSON</button>
     </div>
     <div class="sticky-meta">
       <span>狀態：<b id="stateLabelBottom">發想</b></span>
-      <span class="mini" id="saveHint"></span>
+      <span class="mini" id="toast"></span>
     </div>
   </footer>
 
   <script src="./app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
+    }
+  </script>
 </body>
 </html>
