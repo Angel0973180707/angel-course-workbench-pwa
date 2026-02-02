@@ -1,41 +1,41 @@
-// Angel Course Workbench Step 2-3
-// - AI prompt full template
-// - Tool library API (read) + inline picker (no overlay)
-// - Course management API (write) best-effort with fallbacks
-//
-// NOTE: Since Apps Script endpoints may differ, we implement resilient "try multiple payload shapes".
+
+// Angel Course Workbench v4
+// Fixes:
+// 1) Tool library sync is global (fetch once, cache, shared across states)
+// 2) Idea stage includes course kind + rhythm (dropdown + dynamic fields)
+// 3) Idea & Draft AI prompts both request full course plan incl. materials + homework
+// 4) TSV copy auto-cleans line breaks
+// 5) API write: best-effort; fallback to TSV (auto copy)
 
 const TOOL_API = "https://script.google.com/macros/s/AKfycbwecHTILAMuk5Izr_yF9wfce_qNjxuy28XuvpDzK0LZ4Wszmw7zI3xve8jeLghzveWbXA/exec";
 const COURSE_API = "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec";
 
-const LS_KEY = "angel_course_workbench_step2_3";
-const LS_TOOLS_KEY = "angel_tools_cache_v1";
+const LS_KEY = "angel_course_workbench_v4";
+const LS_TOOLS_KEY = "angel_tools_cache_v2";
+const LS_TOOLS_AT = "angel_tools_cache_at_v2";
 
-const STATE_MAP = { idea: "發想", draft: "草稿", final: "完稿" };
-const TABLE_MAP = { idea: "發想", draft: "草稿", final: "幸福教養課程管理" };
+const STATE_LABEL = { idea: "發想", draft: "草稿", final: "完稿" };
+const SHEET_MAP  = { idea: "發想", draft: "草稿", final: "幸福教養課程管理" };
 
-function formatKind(kind){
-  const k = String(kind||"").toLowerCase();
-  if(k==="module") return "模組課程";
-  if(k==="lecture") return "演講";
-  if(k==="class") return "單場課程";
-  if(k==="activity") return "單場活動";
-  return kind || "未設定";
-}
+const HEADERS = ["id","title","type","status","version","owner","audience","duration_min","capacity","tags","summary","objectives","outline","materials","links","assets","notes","created_at","updated_at"];
 
+const $ = (id) => document.getElementById(id);
 
-const HEADERS = [
-  "id","title","type","status","version","owner","audience","duration_min","capacity","tags",
-  "summary","objectives","outline","materials","links","assets","notes","created_at","updated_at"
-];
-
-const $ = (sel) => document.querySelector(sel);
-const el = (id) => document.getElementById(id);
-
-function nowISO() { return new Date().toISOString(); }
+function nowISO(){ return new Date().toISOString(); }
 function toast(msg){
-  el("toast").textContent = msg;
-  setTimeout(()=>{ el("toast").textContent=""; }, 1800);
+  const t = $("toast");
+  if(!t) return;
+  t.textContent = msg;
+  window.clearTimeout(toast._tm);
+  toast._tm = window.setTimeout(()=> t.textContent="", 1800);
+}
+function esc(s){ return String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;"); }
+function cleanForTSV(s){
+  // user request: auto clean line breaks when copy
+  return String(s??"")
+    .replace(/\r\n/g,"\n")
+    .replace(/[\r\n]+/g," ⏎ ")
+    .replace(/\t/g,"  "); // keep tsv safe
 }
 
 function defaultModel(){
@@ -48,7 +48,7 @@ function defaultModel(){
     version: "v1",
     owner: "",
     audience: "",
-    duration_min: "120",
+    duration_min: "120",    // single session minutes or single event minutes
     capacity: "20",
     tags: "",
     summary: "",
@@ -58,32 +58,35 @@ function defaultModel(){
     links: "",
     assets: "",
     notes: "",
-    closing_line: "",
-    framework_text: "",
-    course_kind: "module", // module / lecture / class / activity
-    sessions_count: "8",
+    created_at: "",
+    updated_at: "",
+
+    // Idea / structure
+    course_kind: "module", // module/lecture/class/activity/other
+    course_kind_other: "",
+    sessions_count: "8",   // module sessions
+    per_session_min: "120",
     days: "1",
     hours_total: "2",
-    episodes: "8", // legacy for prompt
+    closing_line: "",
+    framework_text: "",
+    rhythm_text: "",
 
-    // tool selection
+    // tools
     main_tool_code: "",
     main_tool_name: "",
     main_tool_link: "",
-    sub_tools: [], // [{toolCode,name,link,category,tags}]
-    // draft extras
-    rhythm: "",
-    feedback: "",
-    created_at: "",
-    updated_at: ""
+    sub_tools: [] // [{toolCode,name,link,category}]
   };
 }
 
 function loadLocal(){
   try{
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : defaultModel();
-  }catch(e){ return defaultModel(); }
+    if(!raw) return defaultModel();
+    const m = Object.assign(defaultModel(), JSON.parse(raw));
+    return m;
+  }catch(_){ return defaultModel(); }
 }
 let model = loadLocal();
 
@@ -98,133 +101,514 @@ function saveLocal(silent=false){
   if(!silent) toast("已存本機 ✓");
 }
 
-function escapeHtml(str){
-  return String(str ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
-}
-
-function setDot(dotEl, status){
-  dotEl.classList.remove("ok","doing","todo");
-  dotEl.classList.add(status);
-}
-function computeProgress(){
-  const ideaDone = !!model.title && !!model.audience && !!model.tags && (!!model.framework_text || model.framework_text==="");
-  const draftDone = !!model.objectives && !!model.outline;
-  const finalDone = !!model.summary && !!model.outline && !!model.materials;
-  return { ideaDone, draftDone, finalDone };
-}
-function renderProgress(){
-  const { ideaDone, draftDone, finalDone } = computeProgress();
-  const s = model.state;
-  setDot(el("dotIdea"), ideaDone ? "ok" : (s==="idea" ? "doing" : "todo"));
-  setDot(el("dotDraft"), draftDone ? "ok" : (s==="draft" ? "doing" : "todo"));
-  setDot(el("dotFinal"), finalDone ? "ok" : (s==="final" ? "doing" : "todo"));
-  el("stateLabel").textContent = STATE_MAP[s];
-  el("stateLabelBottom").textContent = STATE_MAP[s];
-  el("apiHint").textContent = `送出會寫入：${TABLE_MAP[s]}（若 API 失敗，你仍可用 TSV 貼回表格）`;
-}
-
-function setState(next){
-  model.state = next;
-  renderAll();
-  saveLocal(true);
-}
-
-function stepCard({ key, title, sub, bodyHtml }){
-  const wrapper = document.createElement("section");
-  wrapper.className = "step";
-  wrapper.dataset.key = key;
-  wrapper.innerHTML = `
-    <div class="step-hd" role="button" tabindex="0">
-      <div>
-        <div class="step-title">${title}</div>
-        <div class="step-sub">${sub}</div>
-      </div>
-      <div class="chev">⌄</div>
-    </div>
-    <div class="step-bd">${bodyHtml}</div>
-  `;
-  const hd = wrapper.querySelector(".step-hd");
-  const toggle = ()=> wrapper.classList.toggle("open");
-  hd.addEventListener("click", toggle);
-  hd.addEventListener("keydown",(e)=>{ if(e.key==="Enter"||e.key===" ") toggle(); });
-  wrapper.classList.add("open"); // default open (less confusing)
-  return wrapper;
-}
-
-function inputField({ id, label, placeholder="", value="", type="text" }){
-  return `
-    <div class="field">
-      <label for="${id}">${label}</label>
-      <input id="${id}" type="${type}" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(value)}" />
-    </div>
-  `;
-}
-function textareaField({ id, label, placeholder="", value="" }){
-  return `
-    <div class="field">
-      <label for="${id}">${label}</label>
-      <textarea id="${id}" placeholder="${escapeHtml(placeholder)}">${escapeHtml(value)}</textarea>
-    </div>
-  `;
-}
-
-/* --------------------- Tool Library --------------------- */
+/* -------------------- Tool library (global) -------------------- */
 let tools = [];
-function normalizeTool(raw){
-  // Accept common field names
-  const toolCode = raw.toolCode ?? raw.code ?? raw.id ?? "";
+let toolsReady = false;
+
+function normalizeToolObject(raw){
+  if(!raw || typeof raw !== "object") return { toolCode:"", name:"", link:"", category:"", status:"", raw };
+  const toolCode = raw.toolCode ?? raw.code ?? raw.id ?? raw.tool_id ?? "";
   const name = raw.name ?? raw.title ?? raw.toolName ?? "";
   const link = raw.link ?? raw.url ?? raw.href ?? "";
   const category = raw.category ?? raw.type ?? raw.class ?? "";
+  const status = raw.status ?? "";
   const tags = raw.tags ?? raw.keyword ?? raw.keywords ?? "";
-  const summary = raw.summary ?? raw.core ?? raw.coreFunction ?? raw.desc ?? "";
-  const pain = raw.pain ?? raw.painPoints ?? raw.problem ?? "";
-  return { toolCode, name, link, category, tags, summary, pain, raw };
+  const core = raw.core ?? raw.summary ?? raw.desc ?? "";
+  const pain = raw.pain_points ?? raw.painPoints ?? raw.pain ?? "";
+  return { toolCode, name, link, category, status, tags, core, pain, raw };
 }
+
+function rowsToObjects(headers, rows){
+  const hs = (headers||[]).map(h=>String(h||"").trim());
+  return (rows||[]).map(r=>{
+    const obj = {};
+    if(Array.isArray(r)){
+      hs.forEach((h,i)=> obj[h] = r[i]);
+    }else if(typeof r==="object" && r){
+      // sometimes row is already object
+      Object.assign(obj, r);
+    }
+    return obj;
+  });
+}
+
+function extractArrayFromAnyPayload(j){
+  if(!j) return [];
+  // direct array
+  if(Array.isArray(j)) return j;
+  // common wrappers
+  if(Array.isArray(j.data)) return j.data;
+  if(Array.isArray(j.items)) return j.items;
+  if(Array.isArray(j.rows) && Array.isArray(j.headers)){
+    return rowsToObjects(j.headers, j.rows);
+  }
+  if(j.data && Array.isArray(j.data.rows) && Array.isArray(j.data.headers)){
+    return rowsToObjects(j.data.headers, j.data.rows);
+  }
+  // Google Visualization style? {table:{cols, rows}}
+  if(j.table && Array.isArray(j.table.rows) && Array.isArray(j.table.cols)){
+    const headers = j.table.cols.map(c=>c.label||c.id||"");
+    const rows = j.table.rows.map(rr=> rr.c ? rr.c.map(c=>c ? c.v : "") : []);
+    return rowsToObjects(headers, rows);
+  }
+  return [];
+}
+
 function loadToolsCache(){
   try{
     const raw = localStorage.getItem(LS_TOOLS_KEY);
     if(!raw) return [];
-    const j = JSON.parse(raw);
-    return (j || []).map(normalizeTool);
-  }catch(e){ return []; }
+    const arr = JSON.parse(raw);
+    return (arr||[]).map(normalizeToolObject).filter(t=>t.toolCode||t.name);
+  }catch(_){ return []; }
 }
 function saveToolsCache(list){
   try{
     localStorage.setItem(LS_TOOLS_KEY, JSON.stringify(list.map(t=>t.raw ?? t)));
-  }catch(e){}
+    localStorage.setItem(LS_TOOLS_AT, nowISO());
+  }catch(_){}
 }
-async function syncTools(){
-  toast("同步工具庫…");
+
+async function syncToolsOnce(force=false){
+  // already ready and not forcing
+  if(toolsReady && !force) return;
+  // try cache first so UI never empty
+  tools = loadToolsCache();
+  if(tools.length){
+    toolsReady = true;
+    renderToolLists(); // can render immediately
+  }
+
   try{
-    const r = await fetch(TOOL_API, { method:"GET" });
-    const j = await r.json();
-    const arr = Array.isArray(j) ? j : (j.data || j.items || []);
-    tools = arr.map(normalizeTool);
-    saveToolsCache(tools);
-    toast(`工具庫已更新 ✓（${tools.length}）`);
-    renderAll();
-  }catch(e){
-    // fallback to cache
-    tools = loadToolsCache();
-    toast(tools.length ? `工具庫離線快取 ✓（${tools.length}）` : "同步失敗（可稍後再試）");
-    renderAll();
+    const res = await fetch(TOOL_API, { method:"GET", cache:"no-store" });
+    const text = await res.text();
+    let j = null;
+    try{ j = JSON.parse(text); }catch(_){ j = null; }
+    const arr = extractArrayFromAnyPayload(j);
+    const normalized = arr.map(normalizeToolObject).filter(t=>t.toolCode||t.name);
+    if(normalized.length){
+      tools = normalized;
+      saveToolsCache(normalized);
+      toolsReady = true;
+      toast(`工具庫已更新 ✓（${tools.length}）`);
+      renderToolLists();
+      return;
+    }
+    // if API returns plain text, keep cache
+    if(tools.length){
+      toolsReady = true;
+      toast(`工具庫快取 ✓（${tools.length}）`);
+    }else{
+      toast("工具庫同步失敗（API 回傳格式不符）");
+    }
+  }catch(err){
+    if(tools.length){
+      toolsReady = true;
+      toast(`工具庫離線快取 ✓（${tools.length}）`);
+    }else{
+      toast("工具庫同步失敗（網路/權限）");
+    }
   }
 }
 
-/* --------------- Tool Picker UI (inline) --------------- */
-function getSubToolsText(){
-  if(!model.sub_tools || !model.sub_tools.length) return "";
-  return model.sub_tools
-    .map(t => `${t.name || ""}｜${t.link || ""}`.trim())
-    .filter(Boolean)
-    .join("\n");
+/* -------------------- UI rendering -------------------- */
+function setDot(dot, status){
+  dot.classList.remove("ok","doing","todo");
+  dot.classList.add(status);
 }
+function computeDone(){
+  const ideaDone = !!model.title && !!model.audience && !!model.tags && !!model.closing_line;
+  const draftDone = !!model.objectives && !!model.outline && !!model.materials;
+  const finalDone = !!model.summary && !!model.outline && !!model.materials;
+  return { ideaDone, draftDone, finalDone };
+}
+function renderProgress(){
+  const { ideaDone, draftDone, finalDone } = computeDone();
+  setDot($("dotIdea"), ideaDone ? "ok" : (model.state==="idea" ? "doing":"todo"));
+  setDot($("dotDraft"), draftDone ? "ok" : (model.state==="draft" ? "doing":"todo"));
+  setDot($("dotFinal"), finalDone ? "ok" : (model.state==="final" ? "doing":"todo"));
+  $("stateLabel").textContent = STATE_LABEL[model.state];
+  $("stateLabelBottom").textContent = STATE_LABEL[model.state];
+  $("apiHint").textContent = `送出會寫入：${SHEET_MAP[model.state]}（若 API 失敗，你仍可用 TSV 貼回表格）`;
+}
+
+function stepCard(title, sub, inner){
+  const sec = document.createElement("section");
+  sec.className = "step open";
+  sec.innerHTML = `
+    <div class="step-hd" role="button" tabindex="0">
+      <div>
+        <div class="step-title">${esc(title)}</div>
+        <div class="step-sub">${esc(sub||"")}</div>
+      </div>
+      <div class="chev">⌄</div>
+    </div>
+    <div class="step-bd">${inner}</div>
+  `;
+  const hd = sec.querySelector(".step-hd");
+  const toggle = ()=> sec.classList.toggle("open");
+  hd.addEventListener("click", toggle);
+  hd.addEventListener("keydown", (e)=>{ if(e.key==="Enter"||e.key===" ") toggle(); });
+  return sec;
+}
+
+function kindLabel(){
+  const map = { module:"模組課程", lecture:"演講", class:"單場課程", activity:"單場活動", other:"其他" };
+  const k = model.course_kind || "module";
+  return k==="other" ? (model.course_kind_other || "其他") : (map[k]||k);
+}
+
+function renderSteps(){
+  const area = $("stepsArea");
+  area.innerHTML = "";
+
+  if(model.state==="idea"){
+    // I-1 definition + kind/rhythm
+    const kindSelect = `
+      <div class="field">
+        <label>課程形式（下拉選單）</label>
+        <select id="i_kind">
+          <option value="lecture"${model.course_kind==="lecture"?" selected":""}>演講</option>
+          <option value="module"${model.course_kind==="module"?" selected":""}>模組課程</option>
+          <option value="class"${model.course_kind==="class"?" selected":""}>單場課程</option>
+          <option value="activity"${model.course_kind==="activity"?" selected":""}>單場活動</option>
+          <option value="other"${model.course_kind==="other"?" selected":""}>其他（手動輸入）</option>
+        </select>
+      </div>
+      <div class="field" id="i_kind_other_wrap" style="display:${model.course_kind==="other"?"block":"none"}">
+        <label>其他形式（手動輸入）</label>
+        <input id="i_kind_other" placeholder="例如：線上直播／工作坊／親師座談…" value="${esc(model.course_kind_other)}"/>
+      </div>
+    `;
+
+    const rhythmBlock = `
+      <div class="grid two">
+        <div class="field" id="i_single_wrap" style="display:${model.course_kind==="module"?"none":"block"}">
+          <label>時間｜單場（分鐘，自填）</label>
+          <input id="i_single_min" placeholder="例如 60 / 90 / 120" value="${esc(model.duration_min)}" />
+        </div>
+        <div class="field" id="i_capacity_wrap">
+          <label>人數（capacity）</label>
+          <input id="i_capacity" placeholder="例如 20" value="${esc(model.capacity)}"/>
+        </div>
+      </div>
+
+      <div class="grid two" id="i_module_wrap" style="display:${model.course_kind==="module"?"grid":"none"}">
+        <div class="field">
+          <label>模組｜幾堂</label>
+          <input id="i_sessions" placeholder="例如 6 / 8 / 10" value="${esc(model.sessions_count)}"/>
+        </div>
+        <div class="field">
+          <label>模組｜每堂時間（分鐘，自填）</label>
+          <input id="i_per_session" placeholder="例如 90 / 120" value="${esc(model.per_session_min)}"/>
+        </div>
+      </div>
+
+      <div class="grid two" id="i_days_hours_wrap" style="display:${model.course_kind==="module"?"grid":"none"}">
+        <div class="field">
+          <label>模組｜天數（可填 1）</label>
+          <input id="i_days" placeholder="1" value="${esc(model.days)}"/>
+        </div>
+        <div class="field">
+          <label>模組｜總時數（小時，自填）</label>
+          <input id="i_hours_total" placeholder="例如 6 / 12" value="${esc(model.hours_total)}"/>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>節律/結構提醒（可簡短）</label>
+        <textarea id="i_rhythm" placeholder="例如：每堂 10暖身→30核心→30練習→20作業/回饋">${esc(model.rhythm_text)}</textarea>
+      </div>
+    `;
+
+    const card1 = stepCard("I-1｜一句話定義 + 形式與節律", "先把骨架站穩：這堂課是什麼、為誰做、怎麼走", `
+      <div class="field">
+        <label>課名（title）</label>
+        <input id="i_title" placeholder="例如：幸福教養｜情緒急救到關係修復" value="${esc(model.title)}"/>
+      </div>
+      <div class="grid two">
+        <div class="field">
+          <label>對象（audience）</label>
+          <input id="i_audience" placeholder="親子 / 家長 / 老師 / 青少年…" value="${esc(model.audience)}"/>
+        </div>
+        <div class="field">
+          <label>關鍵痛點/標籤（tags）</label>
+          <input id="i_tags" placeholder="#情緒很滿 #親子卡住 #反應太快…" value="${esc(model.tags)}"/>
+        </div>
+      </div>
+      <div class="grid two">
+        <div class="field">
+          <label>類型/平台（type）</label>
+          <input id="i_type" placeholder="現場 / 線上 / 校園 / 親子活動…" value="${esc(model.type)}"/>
+        </div>
+        <div class="field">
+          <label>版本（version）</label>
+          <input id="i_version" placeholder="v1 / v1.1" value="${esc(model.version)}"/>
+        </div>
+      </div>
+      ${kindSelect}
+      ${rhythmBlock}
+    `);
+
+    const card2 = stepCard("I-2｜結果感（結尾定錨句）", "一句話把幸福感鎖回來", `
+      <div class="field">
+        <label>closing_line（結尾一句話）</label>
+        <textarea id="i_closing" placeholder="例如：孩子不需要你完美，他需要你回得來。">${esc(model.closing_line)}</textarea>
+      </div>
+    `);
+
+    const card3 = stepCard("I-3｜工具配方（勾選）", "主工具單選 / 副工具多選（全工作台共用同一份工具庫）", toolPickerHtml());
+
+    const card4 = stepCard("I-4｜粗架構", "先有骨架，再往下長（這裡可寫得很短）", `
+      <div class="field">
+        <label>核心流程架構（framework_text）</label>
+        <textarea id="i_framework" placeholder="例如：情緒急救→翻譯行為→關係修復→帶回日常">${esc(model.framework_text)}</textarea>
+      </div>
+      <div class="field" id="i_outline_wrap">
+        <label>${model.course_kind==="module" ? "模組：每堂一句話大綱" : "單場：流程大綱（段落即可）"}</label>
+        <textarea id="i_outline" placeholder="${model.course_kind==="module" ? "第1堂…\n第2堂…\n（寫到幾堂即可）" : "開場→情緒急救→核心活動→帶回日常→收束"}">${esc(model.outline)}</textarea>
+      </div>
+      <div class="row">
+        <button class="btn" id="btnToDraft">進草稿 →</button>
+      </div>
+    `);
+
+    area.append(card1, card2, card3, card4);
+
+  } else if(model.state==="draft"){
+    const card1 = stepCard("D-1｜目標與節律", "可試教版本：把目的、節律、作業感建立起來", `
+      <div class="field">
+        <label>objectives（條列）</label>
+        <textarea id="d_objectives" placeholder="• 學會 30 秒急救\n• 能說出一段不傷人的回話…">${esc(model.objectives)}</textarea>
+      </div>
+      <div class="field">
+        <label>節律補充（承接發想，可再細一點）</label>
+        <textarea id="d_rhythm" placeholder="例如：每堂 10暖身→30核心→30練習→20作業/回饋">${esc(model.rhythm_text)}</textarea>
+      </div>
+      <div class="mini">形式：${esc(kindLabel())}｜模組堂數：${esc(model.sessions_count)}｜每堂分鐘：${esc(model.per_session_min)}｜單場分鐘：${esc(model.duration_min)}</div>
+    `);
+
+    const card2 = stepCard("D-2｜詳細設計內容", "每堂/單場：目標→工具→練習→作業（可直接試教）", `
+      <div class="field">
+        <label>outline（可直接試教版）</label>
+        <textarea id="d_outline" placeholder="第1堂：目標… 工具… 練習… 作業…\n第2堂：...">${esc(model.outline)}</textarea>
+      </div>
+    `);
+
+    const card3 = stepCard("D-3｜教材與作業清單", "你要的：教材＋作業內容（草稿也要完整）", `
+      <div class="field">
+        <label>materials（教材/講義/提醒卡/PPT）</label>
+        <textarea id="d_materials" placeholder="• PPT：…\n• 練習單：…\n• 作業卡：…">${esc(model.materials)}</textarea>
+      </div>
+      <div class="field">
+        <label>notes（作業/交付物補充）</label>
+        <textarea id="d_notes" placeholder="每週作業說明、結業小抄、交付物格式…">${esc(model.notes)}</textarea>
+      </div>
+    `);
+
+    const card4 = stepCard("D-4｜工具與連結整理", "主/副工具已選就會自動整理 links", `
+      ${toolSummaryHtml()}
+      <div class="row">
+        <button class="btn" id="btnToFinal">進完稿 →</button>
+      </div>
+    `);
+
+    area.append(card1, card2, card3, card4);
+
+  } else {
+    const card1 = stepCard("F-1｜對外提案版文案", "完稿：可對外、可上架、可進正式表", `
+      <div class="field">
+        <label>summary（對外版）</label>
+        <textarea id="f_summary" placeholder="對外介紹：這堂課解決什麼、適合誰、帶走什麼">${esc(model.summary)}</textarea>
+      </div>
+      <div class="field">
+        <label>objectives（對外可讀版）</label>
+        <textarea id="f_objectives" placeholder="• …">${esc(model.objectives)}</textarea>
+      </div>
+    `);
+    const card2 = stepCard("F-2｜設計定稿", "把 outline/materials/links 整理成可交付版本", `
+      <div class="field">
+        <label>outline（正式版）</label>
+        <textarea id="f_outline" placeholder="">${esc(model.outline)}</textarea>
+      </div>
+      <div class="field">
+        <label>materials（清單）</label>
+        <textarea id="f_materials" placeholder="">${esc(model.materials)}</textarea>
+      </div>
+      <div class="field">
+        <label>links（工具連結整理）</label>
+        <textarea id="f_links" placeholder="">${esc(model.links)}</textarea>
+      </div>
+    `);
+    const card3 = stepCard("F-3｜製作物清單（可全要）", "PPT 大綱／逐頁講稿／口播稿／主持稿…先列清單即可", `
+      <div class="field">
+        <label>assets（檔案清單）</label>
+        <textarea id="f_assets" placeholder="PPT、講稿、口播稿、海報、報名表…">${esc(model.assets)}</textarea>
+      </div>
+    `);
+    const card4 = stepCard("F-4｜確認與封存", "status 預設 ready（保守）", `
+      <div class="grid two">
+        <div class="field">
+          <label>status</label>
+          <input id="f_status" value="${esc(model.status||"ready")}" />
+        </div>
+        <div class="field">
+          <label>notes</label>
+          <input id="f_notes" value="${esc(model.notes)}" placeholder="備註/封存"/>
+        </div>
+      </div>
+      ${toolSummaryHtml()}
+    `);
+    area.append(card1, card2, card3, card4);
+  }
+
+  bindStepInputs();
+}
+
+function toolSummaryHtml(){
+  const main = model.main_tool_name ? `${esc(model.main_tool_name)}｜${esc(model.main_tool_link)}` : "（尚未選）";
+  const subs = (model.sub_tools||[]).map(t=>`${esc(t.name)}｜${esc(t.link)}`).join("\n");
+  return `
+    <div class="field">
+      <label>主工具</label>
+      <textarea readonly>${main}</textarea>
+    </div>
+    <div class="field">
+      <label>副工具</label>
+      <textarea readonly>${subs}</textarea>
+    </div>
+  `;
+}
+
+function toolPickerHtml(){
+  return `
+    <div class="tool-box">
+      <div class="grid two">
+        <div class="field">
+          <label>搜尋</label>
+          <input id="toolSearch" placeholder="輸入關鍵字：MIX / 五感 / 情緒…" />
+        </div>
+        <div class="field">
+          <label>前綴</label>
+          <select id="toolPrefix">
+            <option value="ALL">全部</option>
+            <option value="MIX">MIX</option>
+            <option value="EQ">EQ</option>
+            <option value="COM">COM</option>
+            <option value="ACT">ACT</option>
+            <option value="REL">REL</option>
+            <option value="KIDS">KIDS</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid two">
+        <div class="field">
+          <label>分類</label>
+          <select id="toolCategory"><option value="ALL">全部</option></select>
+        </div>
+        <div class="mini" id="toolStatusMini">（工具庫：尚未同步）</div>
+      </div>
+
+      <div class="tool-lists">
+        <div class="tool-col">
+          <div class="tool-title">主工具（單選）</div>
+          <div id="mainToolList" class="tool-list"></div>
+        </div>
+        <div class="tool-col">
+          <div class="tool-title">副工具（多選）</div>
+          <div id="subToolList" class="tool-list"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function filterTools(all, q, prefix, category){
+  const qq = (q||"").trim().toLowerCase();
+  return (all||[]).filter(t=>{
+    if(t.status && String(t.status).toLowerCase()!=="active") return false;
+    const hay = [t.toolCode,t.name,t.category,t.tags,t.core,t.pain,t.link].join(" ").toLowerCase();
+    const okQ = !qq || hay.includes(qq);
+    const okPrefix = (prefix==="ALL") || (String(t.toolCode||"").toUpperCase().startsWith(prefix));
+    const okCat = (category==="ALL") || (String(t.category||"")===category);
+    return okQ && okPrefix && okCat;
+  });
+}
+
+function toolItemHtml(t, mode){
+  const code = esc(t.toolCode||"");
+  const name = esc(t.name||"");
+  const cat = esc(t.category||"");
+  const link = esc(t.link||"");
+  const key = mode==="main" ? "main" : "sub";
+  const checkedMain = (mode==="main" && model.main_tool_code===t.toolCode) ? "checked" : "";
+  const checkedSub = (mode==="sub" && (model.sub_tools||[]).some(x=>x.toolCode===t.toolCode)) ? "checked" : "";
+  const input = mode==="main"
+    ? `<input type="radio" name="mainTool" ${checkedMain} data-toolcode="${code}" data-name="${name}" data-link="${link}" data-category="${cat}">`
+    : `<input type="checkbox" ${checkedSub} data-toolcode="${code}" data-name="${name}" data-link="${link}" data-category="${cat}">`;
+  return `
+    <label class="tool-item">
+      ${input}
+      <div>
+        <div class="t">${code}｜${name}</div>
+        <div class="m">${cat}${link?`｜${link}`:""}</div>
+      </div>
+    </label>
+  `;
+}
+
+function renderToolLists(){
+  const all = toolsReady ? tools : loadToolsCache();
+  const statusMini = $("toolStatusMini");
+  if(statusMini){
+    statusMini.textContent = all.length ? `（工具庫：${all.length}）` : "（工具庫：尚未同步）";
+  }
+  const q = $("toolSearch")?.value || "";
+  const prefix = $("toolPrefix")?.value || "ALL";
+  const cat = $("toolCategory")?.value || "ALL";
+
+  // update category options once (from full list)
+  const catSel = $("toolCategory");
+  if(catSel && catSel.options.length<=1){
+    const cats = Array.from(new Set(all.map(t=>t.category).filter(Boolean))).sort();
+    cats.forEach(c=>{
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = c;
+      catSel.appendChild(opt);
+    });
+  }
+
+  const list = filterTools(all, q, prefix, cat).slice(0, 80);
+  $("mainToolList").innerHTML = list.map(t=>toolItemHtml(t,"main")).join("") || `<div class="mini">（找不到）</div>`;
+  $("subToolList").innerHTML  = list.map(t=>toolItemHtml(t,"sub")).join("")  || `<div class="mini">（找不到）</div>`;
+
+  $("mainToolList").querySelectorAll("input[type=radio]").forEach(inp=>{
+    inp.addEventListener("change", ()=>{
+      model.main_tool_code = inp.dataset.toolcode||"";
+      model.main_tool_name = inp.dataset.name||"";
+      model.main_tool_link = inp.dataset.link||"";
+      rebuildLinksFromTools();
+      saveLocal(true);
+      toast("主工具已選 ✓");
+    });
+  });
+  $("subToolList").querySelectorAll("input[type=checkbox]").forEach(inp=>{
+    inp.addEventListener("change", ()=>{
+      const toolCode = inp.dataset.toolcode||"";
+      const tool = { toolCode, name: inp.dataset.name||"", link: inp.dataset.link||"", category: inp.dataset.category||"" };
+      const arr = model.sub_tools||[];
+      const exists = arr.some(x=>x.toolCode===toolCode);
+      if(inp.checked && !exists) arr.push(tool);
+      if(!inp.checked && exists) model.sub_tools = arr.filter(x=>x.toolCode!==toolCode);
+      else model.sub_tools = arr;
+      rebuildLinksFromTools();
+      saveLocal(true);
+      toast("副工具已更新 ✓");
+    });
+  });
+}
+
 function rebuildLinksFromTools(){
   const lines = [];
   if(model.main_tool_name && model.main_tool_link){
@@ -233,515 +617,157 @@ function rebuildLinksFromTools(){
   (model.sub_tools||[]).forEach(t=>{
     if(t.name && t.link) lines.push(`${t.name}｜${t.link}`);
   });
-  // merge with existing links (keep other links too)
-  const existing = (model.links||"").split("\n").map(s=>s.trim()).filter(Boolean);
-  const merged = [...new Set([...lines, ...existing])];
+  // merge with existing manual links (keep)
+  const manual = String(model.links||"").split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  const merged = Array.from(new Set([...lines, ...manual]));
   model.links = merged.join("\n");
 }
-function toolItemHtml(t, mode){
-  // mode: "main" | "sub"
-  const checkedMain = (mode==="main") && (model.main_tool_code === t.toolCode);
-  const checkedSub = (mode==="sub") && (model.sub_tools||[]).some(x => (x.toolCode===t.toolCode) || (x.link && x.link===t.link));
-  const inputType = mode==="main" ? "radio" : "checkbox";
-  const nameAttr = mode==="main" ? "mainTool" : `subTool_${t.toolCode}`;
-  const tagPills = [
-    t.toolCode ? `<span class="pilltag">${escapeHtml(t.toolCode)}</span>` : "",
-    t.category ? `<span class="pilltag">${escapeHtml(t.category)}</span>` : ""
-  ].filter(Boolean).join("");
-  const subline = [t.summary, t.pain, t.tags].filter(Boolean).join("｜");
-  return `
-    <div class="tool-item">
-      <input type="${inputType}" name="${nameAttr}" ${checkedMain||checkedSub ? "checked" : ""}
-        data-toolcode="${escapeHtml(t.toolCode)}"
-        data-name="${escapeHtml(t.name)}"
-        data-link="${escapeHtml(t.link)}"
-        data-category="${escapeHtml(t.category)}"
-        data-tags="${escapeHtml(typeof t.tags==="string"?t.tags:JSON.stringify(t.tags))}"
-      />
-      <div class="tool-meta">
-        <div class="tool-name">${escapeHtml(t.name)}</div>
-        <div class="tool-sub">${escapeHtml(subline || (t.link || ""))}</div>
-        <div class="tagline">${tagPills}</div>
-      </div>
-    </div>
-  `;
-}
-function toolsPickerHtml(){
-  const all = tools.length ? tools : loadToolsCache();
-  const categories = [...new Set(all.map(t => (t.category||"").trim()).filter(Boolean))].sort();
-  const prefixes = ["ALL","MIX","EQ","COM","ACT","REL","KIDS","NEURO","LIFE","POEM"];
-  return `
-    <div class="tools-panel">
-      <div class="tools-toolbar">
-        <input id="toolSearch" placeholder="搜尋：工具名/代碼/類別" />
-        <select id="toolPrefix">
-          ${prefixes.map(p=>`<option value="${p}">${p}</option>`).join("")}
-        </select>
-        <select id="toolCategory">
-          <option value="ALL">全部分類</option>
-          ${categories.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}
-        </select>
-        <button id="btnToolsClear" class="btn ghost" type="button">清空勾選</button>
-      </div>
 
-      <div class="tools-grid">
-        <div class="tools-box">
-          <h3>主工具（單選）</h3>
-          <div id="mainToolList"></div>
-        </div>
-        <div class="tools-box">
-          <h3>副工具（多選）</h3>
-          <div id="subToolList"></div>
-        </div>
-      </div>
-
-      <div class="hint">
-        勾選後會自動整理到 <b>links</b> 欄位；你仍可在下方手動加上其他連結。
-      </div>
-    </div>
-  `;
-}
-function filterTools(all, q, prefix, category){
-  const qq = (q||"").trim().toLowerCase();
-  return all.filter(t=>{
-    const okQ = !qq || [t.toolCode,t.name,t.category,t.tags,t.summary,t.pain,t.link].join(" ").toLowerCase().includes(qq);
-    const okPrefix = (prefix==="ALL") || ((t.toolCode||"").toUpperCase().startsWith(prefix));
-    const okCat = (category==="ALL") || ((t.category||"")===category);
-    return okQ && okPrefix && okCat;
-  });
-}
-function renderToolLists(){
-  const all = tools.length ? tools : loadToolsCache();
-  const q = el("toolSearch")?.value || "";
-  const prefix = el("toolPrefix")?.value || "ALL";
-  const cat = el("toolCategory")?.value || "ALL";
-  const list = filterTools(all, q, prefix, cat).slice(0, 60); // keep light
-  const mainHtml = list.map(t=>toolItemHtml(t,"main")).join("") || `<div class="mini">（找不到）</div>`;
-  const subHtml  = list.map(t=>toolItemHtml(t,"sub")).join("") || `<div class="mini">（找不到）</div>`;
-  el("mainToolList").innerHTML = mainHtml;
-  el("subToolList").innerHTML = subHtml;
-
-  // bind change
-  el("mainToolList").querySelectorAll("input[type=radio]").forEach(inp=>{
-    inp.addEventListener("change", ()=>{
-      model.main_tool_code = inp.dataset.toolcode || "";
-      model.main_tool_name = inp.dataset.name || "";
-      model.main_tool_link = inp.dataset.link || "";
-      rebuildLinksFromTools();
-      saveLocal(true);
-      toast("主工具已選 ✓");
-    });
-  });
-  el("subToolList").querySelectorAll("input[type=checkbox]").forEach(inp=>{
-    inp.addEventListener("change", ()=>{
-      const t = {
-        toolCode: inp.dataset.toolcode || "",
-        name: inp.dataset.name || "",
-        link: inp.dataset.link || "",
-        category: inp.dataset.category || "",
-        tags: inp.dataset.tags || ""
-      };
-      model.sub_tools = model.sub_tools || [];
-      const exists = model.sub_tools.some(x => (x.toolCode && x.toolCode===t.toolCode) || (x.link && x.link===t.link));
-      if(inp.checked && !exists){
-        model.sub_tools.push(t);
-      }
-      if(!inp.checked && exists){
-        model.sub_tools = model.sub_tools.filter(x => !((x.toolCode && x.toolCode===t.toolCode) || (x.link && x.link===t.link)));
-      }
-      rebuildLinksFromTools();
-      saveLocal(true);
-      toast("副工具已更新 ✓");
-      // also sync textarea display if present
-      const ta = el("f_tools_with_links");
-      if(ta) ta.value = getSubToolsText();
-    });
-  });
-}
-function bindToolPickerControls(){
-  const search = el("toolSearch");
-  const prefix = el("toolPrefix");
-  const cat = el("toolCategory");
-  if(search) search.addEventListener("input", ()=> renderToolLists());
-  if(prefix) prefix.addEventListener("change", ()=> renderToolLists());
-  if(cat) cat.addEventListener("change", ()=> renderToolLists());
-  const btnClear = el("btnToolsClear");
-  if(btnClear) btnClear.addEventListener("click", ()=>{
-    model.main_tool_code=""; model.main_tool_name=""; model.main_tool_link="";
-    model.sub_tools=[];
-    rebuildLinksFromTools();
-    saveLocal(true);
-    renderAll();
-    toast("已清空勾選");
-  });
-}
-
-/* --------------------- Steps rendering --------------------- */
-function renderSteps(){
-  const area = el("stepsArea");
-  area.innerHTML = "";
-  const s = model.state;
-
-  if(s==="idea"){
-    area.appendChild(stepCard({
-      key:"I1", title:"I-1｜一句話定義", sub:"課名、對象、痛點（先站穩，不求完整）",
-      bodyHtml:`
-        <div class="grid two">
-          ${inputField({id:"f_title",label:"title（課名）",placeholder:"例如：給親子的｜幸福教養體驗活動",value:model.title})}
-          ${inputField({id:"f_audience",label:"audience（對象）",placeholder:"親子/家長/老師",value:model.audience})}
-        </div>
-        ${inputField({id:"f_tags",label:"tags（關鍵痛點/標籤）",placeholder:"#情緒急救 #關係修復 #不打不罵",value:model.tags})}
-        <div class="hint">先寫「你真的想解的痛點」就好，不用漂亮。</div>
-      `
-    }));
-
-    area.appendChild(stepCard({
-      key:"I2", title:"I-2｜結果感（結尾一句話）", sub:"一句能定錨的話",
-      bodyHtml:`
-        ${textareaField({id:"f_closing",label:"closing_line（結尾定錨句）",placeholder:"孩子不需要你完美，他需要你回得來。",value:model.closing_line})}
-      `
-    }));
-
-    area.appendChild(stepCard({
-      key:"I3", title:"I-3｜工具配方（工具庫勾選）", sub:"主工具單選 / 副工具多選（頁內、無遮罩）",
-      bodyHtml:`
-        ${toolsPickerHtml()}
-        <div class="grid two">
-          ${inputField({id:"f_main_tool_name",label:"主工具（自動帶入，可手改）",placeholder:"",value:model.main_tool_name})}
-          ${inputField({id:"f_main_tool_link",label:"主工具連結（自動帶入，可手改）",placeholder:"",value:model.main_tool_link})}
-        </div>
-        ${textareaField({id:"f_tools_with_links",label:"副工具清單（自動帶入，可手改）",placeholder:"每行一個：工具名｜連結",value:getSubToolsText()})}
-        ${textareaField({id:"f_links",label:"links（工具連結整理＋其他連結）",placeholder:"會自動整理到這裡，你也可以再加別的連結",value:model.links})}
-      `
-    }));
-
-    area.appendChild(stepCard({
-      key:"I4", title:"I-4｜粗架構（段落/單元一句話大綱）", sub:"先把方向站起來",
-      bodyHtml:`
-        ${textareaField({id:"f_framework",label:"framework_text（段落/單元一句話大綱）",placeholder:"（模組）01 ...\n02 ...\n...\n（單場）開場...\n主軸...\n練習...\n收束...",value:model.framework_text})}
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="btnGoDraft" class="btn primary" type="button">進草稿 →</button>
-        </div>
-      `
-    }));
-  }
-
-  if(s==="draft"){
-    area.appendChild(stepCard({
-      key:"D1", title:"D-1｜目標與節律", sub:"可試教、可內測：先把目標與節律說清楚",
-      bodyHtml:`
-        ${textareaField({id:"f_objectives",label:"objectives（條列）",placeholder:"- ...\n- ...",value:model.objectives})}
-        ${inputField({id:"f_rhythm",label:"每週節律（rhythm）",placeholder:"例如：120 分鐘｜90 分鐘｜含作業",value:model.rhythm})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"D2", title:"D-2｜詳細版（可試教短表述）", sub:"每集：目標｜工具｜練習｜作業",
-      bodyHtml:`
-        ${textareaField({id:"f_outline",label:"outline（可試教版本）",placeholder:"第1堂：目標｜工具｜練習｜作業\n第2堂：...",value:model.outline})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"D3", title:"D-3｜交付物與材料", sub:"練習單、提醒、講稿、指引、結業小抄…",
-      bodyHtml:`
-        ${textareaField({id:"f_materials",label:"materials（清單）",placeholder:"- 練習單...\n- 提醒卡...",value:model.materials})}
-        ${textareaField({id:"f_links_draft",label:"links（工具連結整理＋其他連結）",placeholder:"",value:model.links})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"D4", title:"D-4｜回饋與追蹤", sub:"每週回饋題、追蹤方式、工具使用頻率建議",
-      bodyHtml:`
-        ${textareaField({id:"f_feedback",label:"feedback（回饋與追蹤）",placeholder:"每週 3 題回饋：\n1) ...\n2) ...\n追蹤方式：...",value:model.feedback})}
-        <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          <button id="btnGoFinal" class="btn primary" type="button">進完稿 →</button>
-        </div>
-      `
-    }));
-  }
-
-  if(s==="final"){
-    area.appendChild(stepCard({
-      key:"F1", title:"F-1｜正式提案版文案", sub:"summary / objectives / why effective（腦科學＋幸福教養一句話）",
-      bodyHtml:`
-        ${textareaField({id:"f_summary",label:"summary（對外版）",placeholder:"一段能對外提案的文字",value:model.summary})}
-        ${textareaField({id:"f_objectives_final",label:"objectives（對外可讀版）",placeholder:"- ...\n- ...",value:model.objectives})}
-        ${textareaField({id:"f_why",label:"why effective（放在 notes 內）",placeholder:"腦科學＋幸福教養一句話",value:model.notes})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"F2", title:"F-2｜課程設計定稿", sub:"outline / materials / links（正式可上架）",
-      bodyHtml:`
-        ${textareaField({id:"f_outline_final",label:"outline（正式版）",placeholder:"",value:model.outline})}
-        ${textareaField({id:"f_materials_final",label:"materials（正式清單）",placeholder:"",value:model.materials})}
-        ${textareaField({id:"f_links_final",label:"links（工具連結整理＋其他連結）",placeholder:"",value:model.links})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"F3", title:"F-3｜製作物生成（用 AI 指令一鍵帶出）", sub:"PPT 大綱、逐頁講稿、口播稿、主持稿",
-      bodyHtml:`
-        <div class="hint">
-          這一步你不用手打。你按底部「一鍵複製｜AI 指令（完整）」貼到 ChatGPT / Gemini，會依「完稿」規格輸出：提案版＋PPT＋逐頁講稿＋口播稿＋主持稿。
-        </div>
-        ${textareaField({id:"f_assets",label:"assets（檔案清單）",placeholder:"ppt/講稿/練習單/音檔...",value:model.assets})}
-      `
-    }));
-    area.appendChild(stepCard({
-      key:"F4", title:"F-4｜確認與封存", sub:"status 預設 ready（保守）＋ version ＋ notes",
-      bodyHtml:`
-        <div class="grid two">
-          ${inputField({id:"f_status",label:"status（ready/hold/archived）",placeholder:"ready",value:model.status || "ready"})}
-          ${inputField({id:"f_version_final",label:"version",placeholder:"v1",value:model.version || "v1"})}
-        </div>
-        ${textareaField({id:"f_notes_final",label:"notes",placeholder:"封存說明、注意事項…",value:model.notes})}
-      `
-    }));
-  }
-
-  bindInputs();
-  // Tool picker only exists on idea state
-  if(model.state==="idea"){
-    bindToolPickerControls();
-    renderToolLists();
-  }
-  bindStateJumpButtons();
-}
-
-function bindStateJumpButtons(){
-  const btnGoDraft = el("btnGoDraft");
-  if(btnGoDraft) btnGoDraft.addEventListener("click", ()=> setState("draft"));
-  const btnGoFinal = el("btnGoFinal");
-  if(btnGoFinal) btnGoFinal.addEventListener("click", ()=> setState("final"));
-}
-
-function bindInputs(){
-  const bind = (id, field) => {
-    const node = el(id);
-    if(!node) return;
-    node.addEventListener("input", ()=>{
-      model[field] = node.value;
-      // keep some cross-field sync
-      if(field==="f_main_tool_name") model.main_tool_name = node.value;
-      saveLocal(true);
-      renderProgress();
-    });
+/* -------------------- Build row object / TSV -------------------- */
+function buildMetaNotes(){
+  // store extended structure without changing headers
+  const meta = {
+    kind: kindLabel(),
+    sessions_count: model.sessions_count,
+    per_session_min: model.per_session_min,
+    single_min: model.duration_min,
+    days: model.days,
+    hours_total: model.hours_total,
+    rhythm: model.rhythm_text
   };
-
-  // idea
-  if(el("f_title")) el("f_title").addEventListener("input", e=>{ model.title=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_audience")) el("f_audience").addEventListener("input", e=>{ model.audience=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_tags")) el("f_tags").addEventListener("input", e=>{ model.tags=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_closing")) el("f_closing").addEventListener("input", e=>{ model.closing_line=e.target.value; saveLocal(true); });
-  if(el("f_framework")) el("f_framework").addEventListener("input", e=>{ model.framework_text=e.target.value; saveLocal(true); renderProgress(); });
-
-  if(el("f_main_tool_name")) el("f_main_tool_name").addEventListener("input", e=>{ model.main_tool_name=e.target.value; saveLocal(true); });
-  if(el("f_main_tool_link")) el("f_main_tool_link").addEventListener("input", e=>{ model.main_tool_link=e.target.value; saveLocal(true); });
-  if(el("f_tools_with_links")) el("f_tools_with_links").addEventListener("input", e=>{
-    // manual edits stay in text; we also keep sub_tools best-effort (do not parse aggressively)
-    saveLocal(true);
-  });
-  if(el("f_links")) el("f_links").addEventListener("input", e=>{ model.links=e.target.value; saveLocal(true); });
-
-  // draft
-  if(el("f_objectives")) el("f_objectives").addEventListener("input", e=>{ model.objectives=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_rhythm")) el("f_rhythm").addEventListener("input", e=>{ model.rhythm=e.target.value; saveLocal(true); });
-  if(el("f_outline")) el("f_outline").addEventListener("input", e=>{ model.outline=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_materials")) el("f_materials").addEventListener("input", e=>{ model.materials=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_links_draft")) el("f_links_draft").addEventListener("input", e=>{ model.links=e.target.value; saveLocal(true); });
-  if(el("f_feedback")) el("f_feedback").addEventListener("input", e=>{ model.feedback=e.target.value; saveLocal(true); });
-
-  // final
-  if(el("f_summary")) el("f_summary").addEventListener("input", e=>{ model.summary=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_objectives_final")) el("f_objectives_final").addEventListener("input", e=>{ model.objectives=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_why")) el("f_why").addEventListener("input", e=>{ model.notes=e.target.value; saveLocal(true); });
-  if(el("f_outline_final")) el("f_outline_final").addEventListener("input", e=>{ model.outline=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_materials_final")) el("f_materials_final").addEventListener("input", e=>{ model.materials=e.target.value; saveLocal(true); renderProgress(); });
-  if(el("f_links_final")) el("f_links_final").addEventListener("input", e=>{ model.links=e.target.value; saveLocal(true); });
-  if(el("f_assets")) el("f_assets").addEventListener("input", e=>{ model.assets=e.target.value; saveLocal(true); });
-  if(el("f_status")) el("f_status").addEventListener("input", e=>{ model.status=e.target.value || "ready"; saveLocal(true); });
-  if(el("f_version_final")) el("f_version_final").addEventListener("input", e=>{ model.version=e.target.value; saveLocal(true); });
-  if(el("f_notes_final")) el("f_notes_final").addEventListener("input", e=>{ model.notes=e.target.value; saveLocal(true); });
+  const metaLine = "[meta] " + JSON.stringify(meta);
+  const old = String(model.notes||"").split(/\r?\n/).filter(l=>!l.startsWith("[meta]"));
+  return [metaLine, ...old].join("\n").trim();
 }
 
-/* --------------------- Settings --------------------- */
-function renderSettings(){
-  el("toolApiLabel").textContent = TOOL_API;
-  el("courseApiLabel").textContent = COURSE_API;
-
-  el("f_owner").value = model.owner || "";
-  el("f_version").value = model.version || "v1";
-  const kindEl = el("f_kind");
-  if(kindEl) kindEl.value = model.course_kind || "module";
-  const sesEl = el("f_sessions");
-  if(sesEl) sesEl.value = model.sessions_count || model.episodes || "8";
-  const daysEl = el("f_days");
-  if(daysEl) daysEl.value = model.days || "1";
-  const hoursEl = el("f_hours");
-  if(hoursEl) hoursEl.value = model.hours_total || "2";
-  el("f_duration").value = model.duration_min || "120";
-  el("f_capacity").value = model.capacity || "20";
-  el("f_type").value = model.type || "";
-
-  const bind = (id, fn) => {
-    const node = el(id);
-    node.addEventListener("input", ()=>{ fn(node.value); saveLocal(true); });
-  };
-  bind("f_owner", v=> model.owner = v);
-  bind("f_version", v=> model.version = v);
-  bind("f_sessions", v=> { model.sessions_count = v; model.episodes = v; });
-  bind("f_days", v=> model.days = v);
-  bind("f_hours", v=> model.hours_total = v);
-  if(kindEl) kindEl.addEventListener("change", ()=>{ model.course_kind = kindEl.value; saveLocal(true); renderSteps(); });
-  bind("f_duration", v=> model.duration_min = v);
-  bind("f_capacity", v=> model.capacity = v);
-  bind("f_type", v=> model.type = v);
-  const loadBtn = el("btnLoadFromApi");
-  if(loadBtn) loadBtn.onclick = ()=> loadBackendList();
-}
-
-/* --------------------- AI prompt + TSV --------------------- */
-function buildAIPrompt(){
-  ensureId();
-  const stateZh = STATE_MAP[model.state];
-  const mainToolLine = `${model.main_tool_name||""}｜${model.main_tool_link||""}`.trim();
-  const toolList = getSubToolsText() || (model.tool_list_with_links || "");
-  const header = `你是「天使笑長」的協作夥伴。請用溫柔、清楚、不說教的語氣，幫我把課程從「${stateZh}」往下一階段完成。`;
-
-  const block0 = [
-    "0｜已輸入資料（請以此為準，不要改名、不重問）",
-    `課程名稱：${model.title}`,
-    `類型：${model.type}`,
-    `對象：${model.audience}`,
-    `形式/天數/總時數/人數：${formatKind(model.course_kind)}｜${model.days}天｜${model.hours_total}小時｜${model.capacity}人`,
-    `場次/單元：${model.sessions_count}（若為單場/演講可填 1）`,
-    `單場時長：${model.duration_min}分鐘`,
-    `關鍵痛點/標籤：${model.tags}`,
-    `主工具：${mainToolLine}`,
-    `副工具：${toolList}`,
-    `核心流程架構：${model.framework_text}`,
-    `結尾定錨句：${model.closing_line}`
-  ].join("\n");
-
-  const block1 = [
-    "1｜請你輸出三份成果（務必分段標題）",
-    "A) 活動/課程規劃（定位、目標、節律、適用場域）",
-    "B) 詳細設計內容（每集內容、現場流程、練習、作業）",
-    "C) 回饋與追蹤方案（每週追蹤、回饋題、工具使用節律）"
-  ].join("\n");
-
-  const block2 = [
-    "2｜依目前狀態輸出格式（很重要）",
-    `若 ${stateZh}=發想：請先產出「${model.sessions_count} 段/單元的一句話大綱」與「最小可行練習」。若是單場/演講，請用「流程段落」來寫，不要寫太長。`,
-    `若 ${stateZh}=草稿：請補齊每集「目標/工具/練習/作業」，可直接拿去試教。`,
-    `若 ${stateZh}=完稿：請產出「對外提案版」＋「PPT大綱」＋「逐頁講稿」＋「口播稿」＋「演說/主持稿」。`
-  ].join("\n");
-
-  const block3 = [
-    "3｜最後請再輸出：表單橫向一列（可貼入）",
-    "請依下列表頭輸出一列（用 tab 分隔）：",
-    "{id, title, type, status, version, owner, audience, duration_min, capacity, tags, summary, objectives, outline, materials, links, assets, notes, created_at, updated_at}",
-    "若 發想：summary/objectives/outline 可短版",
-    "若 草稿：summary/objectives/outline 完整版",
-    "若 完稿：全部欄位給可上架的定稿版（status 預設 ready）"
-  ].join("\n");
-
-  return [header,"",block0,"",block1,"",block2,"",block3].join("\n");
-}
-
-function sanitizeTSVCell(v){
-  const s = String(v ?? "");
-  return s.replaceAll("\t"," ").replaceAll("\r\n","\n").replaceAll("\r","\n").replaceAll("\n","\\n");
-}
 function buildRowObject(){
   ensureId();
   if(!model.created_at) model.created_at = nowISO();
   model.updated_at = nowISO();
 
-  // conservative defaults
-  const state = model.state;
-  const status = state==="final" ? (model.status || "ready") : (model.status || "ready");
-  const summary = model.summary || (state==="idea" ? `發想：${model.title}` : state==="draft" ? `草稿：可試教｜${model.title}` : `完稿：可對外提案｜${model.title}`);
-  const outline = model.outline || (state==="idea" ? (model.framework_text || "") : "");
-  const objectives = model.objectives || "";
-  const materials = model.materials || "";
-  rebuildLinksFromTools();
-
-  const meta = `kind=${model.course_kind||""}; sessions=${model.sessions_count||model.episodes||""}; days=${model.days||""}; hours_total=${model.hours_total||""}`;
-  const notes = (model.notes||"").trim();
-  const mergedNotes = notes ? (notes + "\\n\\n[meta] " + meta) : ("[meta] " + meta);
-
-  return {
+  const row = {
     id: model.id,
     title: model.title,
     type: model.type,
-    status,
-    version: model.version || "v1",
+    status: (model.state==="final") ? (model.status||"ready") : (model.state==="draft" ? "draft" : "idea"),
+    version: model.version,
     owner: model.owner,
     audience: model.audience,
-    duration_min: model.duration_min,
+    duration_min: (model.course_kind==="module" ? (model.per_session_min||model.duration_min) : (model.duration_min||"")),
     capacity: model.capacity,
     tags: model.tags,
-    summary,
-    objectives,
-    outline,
-    materials,
-    links: model.links || "",
-    assets: model.assets || "",
-    notes: mergedNotes,
+    summary: model.summary,
+    objectives: model.objectives,
+    outline: model.outline,
+    materials: model.materials,
+    links: model.links,
+    assets: model.assets,
+    notes: buildMetaNotes(),
     created_at: model.created_at,
     updated_at: model.updated_at
   };
-}
-function buildTSVRow(){
-  const row = buildRowObject();
-  const cols = HEADERS.map(h => row[h] ?? "");
-  return cols.map(sanitizeTSVCell).join("\t");
+  return row;
 }
 
+function buildTSVRow(){
+  const row = buildRowObject();
+  const cells = HEADERS.map(h => cleanForTSV(row[h] ?? ""));
+  return cells.join("\t");
+}
+
+/* -------------------- Copy helpers -------------------- */
 async function copyText(text){
   try{
     await navigator.clipboard.writeText(text);
     return true;
-  }catch(e){
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.left = "-9999px";
-    document.body.appendChild(ta);
-    ta.focus(); ta.select();
-    const ok = document.execCommand("copy");
-    document.body.removeChild(ta);
-    return ok;
+  }catch(_){
+    // fallback
+    try{
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+      return true;
+    }catch(_2){ return false; }
   }
 }
 
-/* --------------------- API write (best effort) --------------------- */
+/* -------------------- AI prompt -------------------- */
+function toolListWithLinks(){
+  const list = (model.sub_tools||[])
+    .map(t=>`${t.name||""}｜${t.link||""}`.trim())
+    .filter(Boolean)
+    .join("\n");
+  return list;
+}
+
+function makeAiPrompt(){
+  const stateName = STATE_LABEL[model.state];
+  const kind = kindLabel();
+  const sessionsInfo = (model.course_kind==="module")
+    ? `${model.sessions_count}堂｜每堂${model.per_session_min}分鐘｜天數${model.days}｜總時數${model.hours_total}小時`
+    : `單場${model.duration_min}分鐘`;
+  const toolList = toolListWithLinks();
+
+  const stateHint =
+    model.state==="idea"
+      ? "你正在從『發想』往『草稿』：請把骨架補成可試教版本，並同時補齊教材與作業（可先給最小可行版）。"
+      : (model.state==="draft"
+          ? "你正在從『草稿』往『完稿』：請把內容改成可對外提案/可上架的定稿版，教材與作業要完整清楚。"
+          : "你已在『完稿』：請輸出可直接交付的成品，並整理檔案清單。");
+
+  const stateFormat =
+    model.state==="idea"
+      ? "若狀態=發想：請先產出『模組每堂/單場流程大綱』＋『每堂/單場練習與作業（最小可行版）』＋『教材清單（最小可行版）』。"
+      : (model.state==="draft"
+          ? "若狀態=草稿：請補齊每堂/單場『目標/工具/練習/作業』，並給出可直接試教的教材清單與作業說明。"
+          : "若狀態=完稿：請產出『對外提案版』＋『PPT大綱』＋『逐頁講稿』＋『口播稿』＋『演說/主持稿』。");
+
+  return `你是「天使笑長」的協作夥伴。請用溫柔、清楚、不說教的語氣，幫我把課程從「${stateName}」往下一階段完成。\n\n` +
+`0｜已輸入資料（請以此為準，不要改名、不重問）\n` +
+`課程名稱：${model.title}\n` +
+`類型：${model.type}\n` +
+`對象：${model.audience}\n` +
+`形式：${kind}\n` +
+`集數/時數/人數：${sessionsInfo}｜${model.capacity}人\n` +
+`關鍵痛點/標籤：${model.tags}\n` +
+`主工具：${model.main_tool_name}｜${model.main_tool_link}\n` +
+`副工具：${toolList}\n` +
+`核心流程架構：${model.framework_text}\n` +
+`結尾定錨句：${model.closing_line}\n\n` +
+`★ 提醒：${stateHint}\n\n` +
+`1｜請你輸出三份成果（務必分段標題；教材＋作業要完整）\n` +
+`A) 活動/課程規劃（定位、目標、節律、適用場域）\n` +
+`B) 詳細設計內容（每堂/單場內容、現場流程、練習、作業）\n` +
+`C) 教材與作業包（教材清單＋作業說明＋交付物格式）\n\n` +
+`2｜依目前狀態輸出格式（很重要）\n` +
+`${stateFormat}\n\n` +
+`3｜最後請再輸出：表單橫向一列（可貼入）\n` +
+`請依下列表頭輸出一列（用 tab 分隔）：\n` +
+`{id, title, type, status, version, owner, audience, duration_min, capacity, tags, summary, objectives, outline, materials, links, assets, notes, created_at, updated_at}\n\n` +
+`若狀態=發想：summary/objectives/outline 可短版，但教材與作業仍要有（最小可行版）。\n` +
+`若狀態=草稿：summary/objectives/outline 完整可試教版，教材與作業完整。\n` +
+`若狀態=完稿：全部欄位給可上架的定稿版（status 預設 ready）。\n`;
+}
+/* -------------------- API write / list load -------------------- */
 async function tryPostJSON(payload){
-  const res = await fetch(COURSE_API, {
-    method: "POST",
-    headers: { "Content-Type":"application/json" },
-    body: JSON.stringify(payload),
-  });
-  return res;
+  return fetch(COURSE_API, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(payload) });
 }
 async function tryPostForm(payload){
   const params = new URLSearchParams();
   Object.entries(payload).forEach(([k,v])=> params.set(k, typeof v==="string" ? v : JSON.stringify(v)));
-  const res = await fetch(COURSE_API, {
-    method:"POST",
-    headers: {"Content-Type":"application/x-www-form-urlencoded"},
-    body: params.toString()
-  });
-  return res;
+  return fetch(COURSE_API, { method:"POST", headers:{ "Content-Type":"application/x-www-form-urlencoded" }, body: params.toString() });
 }
 async function tryGet(payload){
   const params = new URLSearchParams();
   Object.entries(payload).forEach(([k,v])=> params.set(k, typeof v==="string" ? v : JSON.stringify(v)));
-  const url = COURSE_API + "?" + params.toString();
-  const res = await fetch(url, { method:"GET" });
-  return res;
+  return fetch(COURSE_API + "?" + params.toString(), { method:"GET" });
 }
 
 async function sendToApi(){
-  const sheet = TABLE_MAP[model.state]; // ideas/drafts/final
+  const sheet = SHEET_MAP[model.state];
   const rowObj = buildRowObject();
   const payloads = [
     { action:"append", sheet, row: rowObj },
@@ -752,44 +778,94 @@ async function sendToApi(){
   ];
 
   toast("送出中…");
-  for (const p of payloads){
-    for (const fn of [tryPostJSON, tryPostForm, tryGet]){
+  for(const p of payloads){
+    for(const fn of [tryPostJSON, tryPostForm, tryGet]){
       try{
         const res = await fn(p);
-        if(res.ok){
-          let text = "";
-          try{ text = await res.text(); }catch(e){}
+        if(res && res.ok){
           toast("已寫入試算表 ✓");
-          return;
+          return true;
         }
-      }catch(e){ /* continue */ }
+      }catch(_){}
     }
   }
 
-  toast("送出失敗（改用 TSV 貼回）");
-  // as best effort, also copy TSV automatically
-  const ok = await copyText(buildTSVRow());
-  if(ok) toast("已改複製 TSV（貼回表格）");
+  toast("自動寫入失敗，已複製 TSV，請貼上");
+  await copyText(buildTSVRow());
+  return false;
+}
 
-/* --------------------- Load list from API (best-effort) --------------------- */
+function normalizeListPayload(j){
+  const arr = extractArrayFromAnyPayload(j);
+  if(arr && arr.length) return arr;
+  return null;
+}
+
+async function fetchListFromCourseApi(sheetName){
+  const n = sheetName || "";
+  const candidates = [
+    `${COURSE_API}?action=list&sheet=${encodeURIComponent(n)}`,
+    `${COURSE_API}?action=getAll&sheet=${encodeURIComponent(n)}`,
+    `${COURSE_API}?action=all&sheet=${encodeURIComponent(n)}`,
+    `${COURSE_API}?sheet=${encodeURIComponent(n)}`,
+    `${COURSE_API}?tab=${encodeURIComponent(n)}`
+  ];
+  for(const url of candidates){
+    try{
+      const res = await fetch(url, { method:"GET", cache:"no-store" });
+      const text = await res.text();
+      let j=null; try{ j=JSON.parse(text);}catch(_){ j=null; }
+      const out = normalizeListPayload(j);
+      if(out) return out;
+    }catch(_){}
+  }
+  throw new Error("API 未回傳可解析的 JSON 清單");
+}
+
+function loadRowToModel(row){
+  // row may be array-like or object-like; we treat object
+  const r = (typeof row==="object" && row) ? row : {};
+  model.id = r.id || model.id;
+  model.title = r.title || model.title;
+  model.type = r.type || model.type;
+  model.status = r.status || model.status;
+  model.version = r.version || model.version;
+  model.owner = r.owner || model.owner;
+  model.audience = r.audience || model.audience;
+  model.duration_min = String(r.duration_min ?? model.duration_min);
+  model.capacity = String(r.capacity ?? model.capacity);
+  model.tags = r.tags || model.tags;
+  model.summary = r.summary || model.summary;
+  model.objectives = r.objectives || model.objectives;
+  model.outline = r.outline || model.outline;
+  model.materials = r.materials || model.materials;
+  model.links = r.links || model.links;
+  model.assets = r.assets || model.assets;
+  model.notes = r.notes || model.notes;
+  model.created_at = r.created_at || model.created_at;
+  model.updated_at = r.updated_at || model.updated_at;
+  saveLocal(true);
+  renderAll();
+  toast("已載入 ✓");
+}
+
 async function loadBackendList(){
-  const area = el("apiListArea");
-  if(!area) return;
+  const area = $("apiListArea");
   area.innerHTML = `<div class="mini">載入中…</div>`;
-  const sheet = TABLE_MAP[model.state] || "";
+  const sheet = SHEET_MAP[model.state];
   try{
     const list = await fetchListFromCourseApi(sheet);
-    if(!Array.isArray(list) || list.length===0){
+    if(!Array.isArray(list) || !list.length){
       area.innerHTML = `<div class="mini">後臺沒有資料，或 API 未提供清單介面（仍可用 TSV 貼回）。</div>`;
       return;
     }
     area.innerHTML = list.slice(0,50).map((row,i)=>{
-      const t = esc(row.title || row.id || `(第${i+1}筆)`);
+      const title = esc(row.title || row.id || `(第${i+1}筆)`);
       const sub = esc(`${row.type||""}｜${row.status||""}｜${row.updated_at||row.created_at||""}`.replace(/^｜+|｜+$/g,""));
       return `
         <div class="api-item">
           <div>
-            <div class="t">${t}</div>
+            <div class="t">${title}</div>
             <div class="m">${sub}</div>
           </div>
           <button class="btn" data-load="${i}">載入</button>
@@ -800,123 +876,209 @@ async function loadBackendList(){
     area.querySelectorAll("[data-load]").forEach(btn=>{
       btn.addEventListener("click", ()=>{
         const idx = Number(btn.getAttribute("data-load"));
-        const row = list[idx];
-        if(row) loadRowToModel(row);
+        loadRowToModel(list[idx]);
       });
     });
-    toast(`已載入 ${Math.min(list.length,50)} 筆（只顯示前 50）`);
+    toast(`已載入 ${Math.min(list.length,50)} 筆`);
   }catch(err){
-    console.error(err);
     area.innerHTML = `<div class="mini">載入失敗：${esc(String(err))}</div>`;
   }
 }
 
-async function fetchListFromCourseApi(sheetName){
-  const name = sheetName || "";
-  const candidates = [
-    `${COURSE_API}?action=list&sheet=${encodeURIComponent(name)}`,
-    `${COURSE_API}?action=getAll&sheet=${encodeURIComponent(name)}`,
-    `${COURSE_API}?action=all&sheet=${encodeURIComponent(name)}`,
-    `${COURSE_API}?sheet=${encodeURIComponent(name)}`,
-    `${COURSE_API}?tab=${encodeURIComponent(name)}`
-  ];
-  for(const url of candidates){
-    try{
-      const res = await fetch(url, {method:"GET", cache:"no-store"});
-      const text = await res.text();
-      let data = null;
-      try{ data = JSON.parse(text); }catch(_){}
-      const arr = normalizeListPayload(data);
-      if(arr) return arr;
-    }catch(_){}
+/* -------------------- Bind inputs -------------------- */
+function bindStepInputs(){
+  // Idea inputs
+  const bind = (id, key, parser=(v)=>v)=> {
+    const node = $(id);
+    if(!node) return;
+    node.addEventListener("input", ()=>{
+      model[key] = parser(node.value);
+      // dynamic show/hide
+      if(id==="i_kind"){
+        model.course_kind = node.value;
+        if(model.course_kind!=="module"){
+          // keep single duration in duration_min
+          if(!model.duration_min) model.duration_min = node.value;
+        }
+        renderAll(); // re-render idea to update dynamic sections
+        saveLocal(true);
+        return;
+      }
+      saveLocal(true);
+      renderProgress();
+      // rebuild links if user edits manual links
+      if(key==="links") rebuildLinksFromTools();
+    });
+  };
+
+  bind("i_title","title");
+  bind("i_audience","audience");
+  bind("i_tags","tags");
+  bind("i_type","type");
+  bind("i_version","version");
+  bind("i_kind","course_kind");
+  bind("i_kind_other","course_kind_other");
+  bind("i_single_min","duration_min");
+  bind("i_capacity","capacity");
+  bind("i_sessions","sessions_count");
+  bind("i_per_session","per_session_min");
+  bind("i_days","days");
+  bind("i_hours_total","hours_total");
+  bind("i_rhythm","rhythm_text");
+  bind("i_closing","closing_line");
+  bind("i_framework","framework_text");
+  bind("i_outline","outline");
+
+  // Draft inputs
+  bind("d_objectives","objectives");
+  bind("d_rhythm","rhythm_text");
+  bind("d_outline","outline");
+  bind("d_materials","materials");
+  bind("d_notes","notes");
+
+  // Final inputs
+  bind("f_summary","summary");
+  bind("f_objectives","objectives");
+  bind("f_outline","outline");
+  bind("f_materials","materials");
+  bind("f_links","links");
+  bind("f_assets","assets");
+  bind("f_status","status");
+  bind("f_notes","notes");
+
+  // Tool picker events
+  if($("toolSearch")){
+    ["toolSearch","toolPrefix","toolCategory"].forEach(id=>{
+      $(id).addEventListener("input", renderToolLists);
+      $(id).addEventListener("change", renderToolLists);
+    });
+    renderToolLists();
   }
-  throw new Error("API 未回傳可解析的 JSON 清單。");
-}
 
-function normalizeListPayload(payload){
-  if(!payload) return null;
-  if(Array.isArray(payload)) return payload;
-  if(payload.data && Array.isArray(payload.data)) return payload.data;
-  if(payload.items && Array.isArray(payload.items)) return payload.items;
-  if(payload.rows && Array.isArray(payload.rows)) return payload.rows;
-  return null;
-}
+  // Buttons within steps
+  const toDraft = $("btnToDraft");
+  if(toDraft) toDraft.addEventListener("click", ()=>{ model.state="draft"; saveLocal(true); renderAll(); });
+  const toFinal = $("btnToFinal");
+  if(toFinal) toFinal.addEventListener("click", ()=>{ model.state="final"; saveLocal(true); renderAll(); });
 
-function loadRowToModel(row){
-  const keepState = model.state;
-  for(const k of HEADERS){
-    if(row[k]!==undefined && row[k]!==null) model[k] = String(row[k]);
+  // When kind changes, show/hide other input
+  const kindSel = $("i_kind");
+  const otherWrap = $("i_kind_other_wrap");
+  const moduleWrap = $("i_module_wrap");
+  const singleWrap = $("i_single_wrap");
+  const daysHours = $("i_days_hours_wrap");
+  if(kindSel && otherWrap){
+    otherWrap.style.display = (kindSel.value==="other") ? "block" : "none";
   }
-  // extras for this workbench
-  if(row.course_kind) model.course_kind = String(row.course_kind);
-  if(row.sessions_count) model.sessions_count = String(row.sessions_count);
-  if(row.days) model.days = String(row.days);
-  if(row.hours_total) model.hours_total = String(row.hours_total);
-  // legacy fallback
-  model.episodes = model.sessions_count || model.episodes || "1";
-  saveLocal(false);
-  model.state = keepState;
-  renderAll();
-  toast("已載入到目前狀態表單");
+  if(kindSel && moduleWrap && singleWrap){
+    const isModule = kindSel.value==="module";
+    moduleWrap.style.display = isModule ? "grid" : "none";
+    daysHours.style.display = isModule ? "grid" : "none";
+    singleWrap.style.display = isModule ? "none" : "block";
+  }
 }
 
+function bindSettings(){
+  // keep settings as optional quick edit, but values mirror model
+  const setVal = (id, val)=>{ const n=$(id); if(n) n.value = val??""; };
+  setVal("f_owner", model.owner);
+  setVal("f_version", model.version);
+  setVal("f_type", model.type);
+  setVal("f_kind", model.course_kind==="other" ? "module" : model.course_kind); // keep simple
+  setVal("f_sessions", model.sessions_count);
+  setVal("f_duration", model.duration_min);
+  setVal("f_days", model.days);
+  setVal("f_hours", model.hours_total);
+  setVal("f_capacity", model.capacity);
+
+  const bind = (id, key)=>{
+    const n=$(id); if(!n) return;
+    n.addEventListener("input", ()=>{
+      model[key] = n.value;
+      saveLocal(true);
+      renderAll();
+    });
+    n.addEventListener("change", ()=>{
+      model[key] = n.value;
+      saveLocal(true);
+      renderAll();
+    });
+  };
+  bind("f_owner","owner");
+  bind("f_version","version");
+  bind("f_type","type");
+  bind("f_sessions","sessions_count");
+  bind("f_duration","duration_min");
+  bind("f_days","days");
+  bind("f_hours","hours_total");
+  bind("f_capacity","capacity");
 }
 
-/* --------------------- Export --------------------- */
-function exportJSON(){
-  ensureId();
-  if(!model.created_at) model.created_at = nowISO();
-  model.updated_at = nowISO();
-  const blob = new Blob([JSON.stringify(model,null,2)], {type:"application/json"});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${model.id || "course"}-${model.state}.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/* --------------------- Wire up --------------------- */
-function bindTop(){
-  document.querySelectorAll(".pill").forEach(b=> b.addEventListener("click", ()=> setState(b.dataset.state)));
-  el("btnReloadTools").addEventListener("click", syncTools);
-  el("btnToggleSettings").addEventListener("click", ()=>{
-    const card = el("settingsCard");
-    card.style.display = (card.style.display==="none" ? "block" : "none");
-  });
-}
-function bindBottom(){
-  el("btnCopyAI").addEventListener("click", async ()=>{
-    const ok = await copyText(buildAIPrompt());
-    toast(ok ? "AI 指令已複製 ✓" : "複製失敗（可長按）");
-  });
-  el("btnCopyTSV").addEventListener("click", async ()=>{
-    const ok = await copyText(buildTSVRow());
-    toast(ok ? "TSV 已複製 ✓" : "複製失敗（可長按）");
-  });
-  el("btnSendApi").addEventListener("click", sendToApi);
-  el("btnSaveLocal").addEventListener("click", ()=> saveLocal(false));
-  el("btnExportJson").addEventListener("click", exportJSON);
-}
-
+/* -------------------- Render All -------------------- */
 function renderAll(){
   renderProgress();
-  renderSettings();
   renderSteps();
+  $("toolApiLabel").textContent = TOOL_API;
+  $("courseApiLabel").textContent = COURSE_API;
 }
 
+/* -------------------- Global events -------------------- */
 function init(){
-  // label APIs
-  el("toolApiLabel").textContent = TOOL_API;
-  el("courseApiLabel").textContent = COURSE_API;
+  // progress pills
+  document.querySelectorAll(".pill").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      model.state = btn.dataset.state;
+      saveLocal(true);
+      renderAll();
+    });
+  });
 
-  bindTop();
-  bindBottom();
-  tools = loadToolsCache().map(normalizeTool);
+  $("btnToggleSettings").addEventListener("click", ()=>{
+    const card = $("settingsCard");
+    card.style.display = (card.style.display==="none") ? "block" : "none";
+  });
+
+  $("btnReloadTools").addEventListener("click", async ()=>{
+    await syncToolsOnce(true);
+  });
+
+  $("btnSaveLocal").addEventListener("click", ()=> saveLocal(false));
+
+  $("btnCopyAI").addEventListener("click", async ()=>{
+    const ok = await copyText(makeAiPrompt());
+    toast(ok ? "AI 指令已複製 ✓" : "複製失敗");
+  });
+
+  $("btnCopyTSV").addEventListener("click", async ()=>{
+    const ok = await copyText(buildTSVRow());
+    toast(ok ? "TSV 已複製 ✓" : "複製失敗");
+  });
+
+  $("btnExportJson").addEventListener("click", ()=>{
+    saveLocal(true);
+    const blob = new Blob([JSON.stringify(model,null,2)], {type:"application/json"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `angel-course-${model.id||"draft"}.json`;
+    a.click();
+    toast("已匯出 JSON ✓");
+  });
+
+  $("btnSendApi").addEventListener("click", async ()=>{
+    saveLocal(true);
+    await sendToApi();
+  });
+
+  $("btnLoadFromApi").addEventListener("click", async ()=>{
+    await loadBackendList();
+  });
+
+  // initial render
+  bindSettings();
   renderAll();
-  // sync tools in background
-  syncTools();
+
+  // tool sync on start (non-blocking)
+  syncToolsOnce(false);
 }
-init();
+
+window.addEventListener("DOMContentLoaded", init);
