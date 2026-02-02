@@ -11,6 +11,28 @@ const COURSE_API = "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G
 const LS_KEY = "angel_course_workbench_step2_3";
 const LS_TOOLS_KEY = "angel_tools_cache_v1";
 
+// ---- Tool API robustness ----
+function withQuery(url, q){
+  const u = new URL(url);
+  Object.entries(q).forEach(([k,v])=>u.searchParams.set(k,v));
+  return u.toString();
+}
+async function fetchMaybeJson(url){
+  const res = await fetch(url, { method:"GET", headers: { "Accept":"application/json,text/plain,*/*" } });
+  const ct = (res.headers.get("content-type") || "").toLowerCase();
+  const text = await res.text();
+  try{
+    return { ok: true, data: JSON.parse(text), ct, text };
+  }catch(e){
+    const m = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])\s*$/);
+    if(m){
+      try{ return { ok:true, data: JSON.parse(m[1]), ct, text }; }catch(_){}
+    }
+    return { ok:false, data:null, ct, text };
+  }
+}
+
+
 const STATE_MAP = { idea: "發想", draft: "草稿", final: "完稿" };
 const TABLE_MAP = { idea: "ideas", draft: "drafts", final: "final" };
 
@@ -186,20 +208,45 @@ function saveToolsCache(list){
 }
 async function syncTools(){
   toast("同步工具庫…");
-  try{
-    const r = await fetch(TOOL_API, { method:"GET" });
-    const j = await r.json();
-    const arr = Array.isArray(j) ? j : (j.data || j.items || []);
-    tools = arr.map(normalizeTool);
-    saveToolsCache(tools);
-    toast(`工具庫已更新 ✓（${tools.length}）`);
-    renderAll();
-  }catch(e){
-    // fallback to cache
-    tools = loadToolsCache();
-    toast(tools.length ? `工具庫離線快取 ✓（${tools.length}）` : "同步失敗（可稍後再試）");
-    renderAll();
+  const tries = [
+    TOOL_API,
+    withQuery(TOOL_API, { format:"json" }),
+    withQuery(TOOL_API, { output:"json" }),
+    withQuery(TOOL_API, { alt:"json" }),
+    withQuery(TOOL_API, { action:"list" }),
+    withQuery(TOOL_API, { action:"tools" }),
+    withQuery(TOOL_API, { action:"getTools" }),
+  ];
+  let lastErr = "";
+  for(const url of tries){
+    try{
+      const r = await fetchMaybeJson(url);
+      if(r.ok){
+        const j = r.data;
+        const arr = Array.isArray(j) ? j : (j.data || j.items || j.tools || j.rows || []);
+        if(Array.isArray(arr) && arr.length){
+          tools = arr.map(normalizeTool);
+          saveToolsCache(tools);
+          toast(`工具庫已更新 ✓（${tools.length}）`);
+          renderAll();
+          return;
+        }else{
+          lastErr = "JSON 空陣列";
+        }
+      }else{
+        lastErr = `非 JSON（${r.ct||"unknown"}）`;
+      }
+    }catch(e){
+      lastErr = String(e);
+    }
   }
+  tools = loadToolsCache();
+  if(tools.length){
+    toast(`工具庫離線快取 ✓（${tools.length}）`);
+  }else{
+    toast(`同步失敗：${lastErr}（請檢查工具庫 API 是否「任何人」可存取，且回傳 JSON）`);
+  }
+  renderAll();
 }
 
 /* --------------- Tool Picker UI (inline) --------------- */
@@ -253,6 +300,7 @@ function toolItemHtml(t, mode){
 }
 function toolsPickerHtml(){
   const all = tools.length ? tools : loadToolsCache();
+  const emptyBanner = (!all || !all.length) ? `<div class="hint"><b>工具庫尚未載入。</b> 先按右上「同步工具庫」。如果仍為空，代表 API 沒有回傳 JSON 或權限不是「任何人」。</div>` : ``;
   const categories = [...new Set(all.map(t => (t.category||"").trim()).filter(Boolean))].sort();
   const prefixes = ["ALL","MIX","EQ","COM","ACT","REL","KIDS","NEURO","LIFE","POEM"];
   return `
@@ -268,6 +316,8 @@ function toolsPickerHtml(){
         </select>
         <button id="btnToolsClear" class="btn ghost" type="button">清空勾選</button>
       </div>
+
+      ${emptyBanner}
 
       <div class="tools-grid">
         <div class="tools-box">
