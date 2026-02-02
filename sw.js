@@ -1,8 +1,8 @@
-const CACHE_NAME = "angel-course-workbench-v1";
-const CORE_ASSETS = [
+const CACHE_NAME = "angel-course-workbench-v2";
+const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css",
+  "./style.css",
   "./app.js",
   "./manifest.json",
   "./assets/icons/icon-192.png",
@@ -11,29 +11,22 @@ const CORE_ASSETS = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE_ASSETS)).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
   );
+  self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(keys.map((k) => (k === CACHE_NAME ? null : caches.delete(k))))
-    ).then(() => self.clients.claim())
+    )
   );
+  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {
-  const req = event.request;
-  if (req.method !== "GET") return;
   event.respondWith(
-    caches.match(req).then((cached) => {
-      const fetchPromise = fetch(req).then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(req, copy)).catch(()=>{});
-        return res;
-      }).catch(() => cached);
-      return cached || fetchPromise;
-    })
+    caches.match(event.request).then((cached) => cached || fetch(event.request))
   );
 });
