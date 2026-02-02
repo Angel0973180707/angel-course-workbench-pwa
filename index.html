@@ -87,6 +87,35 @@
       </div>
     </section>
 
+
+    <section id="debugCard" class="card">
+      <div class="card-hd">
+        <div class="hd-title">工具庫除錯（看得到就能修）</div>
+        <div class="hd-note">如果工具清單是空的，通常是工具庫 API 沒有回傳 JSON，或權限不是「任何人」。這裡會顯示抓到的原始回應。</div>
+      </div>
+      <div class="card-bd">
+        <div class="grid two">
+          <div class="field">
+            <label>最後一次工具庫請求結果</label>
+            <textarea id="dbg_tool_result" readonly placeholder="點右上『同步工具庫』後，這裡會顯示狀態與前 600 字回應"></textarea>
+          </div>
+          <div class="field">
+            <label>手動匯入工具（備援）</label>
+            <textarea id="dbg_tool_import" placeholder="貼入 JSON 陣列（[ {...},{...} ]）或 TSV（含表頭或不含都可）
+TSV 欄位建議：toolCode	name	link	category	tags	summary"></textarea>
+          </div>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+          <button id="btnImportTools" class="btn">套用｜手動匯入工具</button>
+          <button id="btnClearToolsCache" class="btn ghost">清空工具快取</button>
+        </div>
+        <div class="hint">
+          <b>快速判斷：</b>若回應看起來像 HTML（有 &lt;html&gt;、&lt;!doctype&gt;）或權限提示文字，就代表 Apps Script 沒有回傳 JSON。
+        </div>
+      </div>
+    </section>
+
+
     <section class="wizard">
       <div class="wizard-hd">
         <h2>四步驟 Wizard</h2>

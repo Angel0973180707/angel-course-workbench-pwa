@@ -10,6 +10,7 @@ const COURSE_API = "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G
 
 const LS_KEY = "angel_course_workbench_step2_3";
 const LS_TOOLS_KEY = "angel_tools_cache_v1";
+const LS_DEBUG_KEY = "angel_tools_last_debug_v1";
 
 // ---- Tool API robustness ----
 function withQuery(url, q){
@@ -18,17 +19,30 @@ function withQuery(url, q){
   return u.toString();
 }
 async function fetchMaybeJson(url){
-  const res = await fetch(url, { method:"GET", headers: { "Accept":"application/json,text/plain,*/*" } });
-  const ct = (res.headers.get("content-type") || "").toLowerCase();
-  const text = await res.text();
   try{
-    return { ok: true, data: JSON.parse(text), ct, text };
-  }catch(e){
-    const m = text.match(/(\{[\s\S]*\}|\[[\s\S]*\])\s*$/);
-    if(m){
-      try{ return { ok:true, data: JSON.parse(m[1]), ct, text }; }catch(_){}
+    const resp = await fetch(url, { method:"GET", cache:"no-store" });
+    const text = await resp.text();
+    // try JSON first
+    try{
+      const data = JSON.parse(text);
+      return { ok:true, status:resp.status, data, text };
+    }catch(_){
+      // try TSV (first line as headers)
+      if(text && text.includes("\t") && text.includes("\n")){
+        const rows = text.trim().split(/\r?\n/).filter(Boolean);
+        const headers = rows.shift().split("\t").map(h=>h.trim()).filter(Boolean);
+        const items = rows.map(line=>{
+          const cols = line.split("\t");
+          const obj = {};
+          headers.forEach((h,i)=> obj[h]= (cols[i]??"").trim());
+          return obj;
+        });
+        return { ok:true, status:resp.status, data:{ ok:true, items }, text };
+      }
+      return { ok:false, status:resp.status, text, error:"not_json" };
     }
-    return { ok:false, data:null, ct, text };
+  }catch(e){
+    return { ok:false, status:0, error:String(e) };
   }
 }
 
@@ -45,6 +59,11 @@ const $ = (sel) => document.querySelector(sel);
 const el = (id) => document.getElementById(id);
 
 function nowISO() { return new Date().toISOString(); }
+function setToolDebug(msg){
+  const box = document.getElementById("dbg_tool_result");
+  if(box) box.value = msg;
+}
+
 function toast(msg){
   el("toast").textContent = msg;
   setTimeout(()=>{ el("toast").textContent=""; }, 1800);
@@ -183,15 +202,21 @@ function textareaField({ id, label, placeholder="", value="" }){
 /* --------------------- Tool Library --------------------- */
 let tools = [];
 function normalizeTool(raw){
-  // Accept common field names
-  const toolCode = raw.toolCode ?? raw.code ?? raw.id ?? "";
-  const name = raw.name ?? raw.title ?? raw.toolName ?? "";
-  const link = raw.link ?? raw.url ?? raw.href ?? "";
-  const category = raw.category ?? raw.type ?? raw.class ?? "";
-  const tags = raw.tags ?? raw.keyword ?? raw.keywords ?? "";
-  const summary = raw.summary ?? raw.core ?? raw.coreFunction ?? raw.desc ?? "";
-  const pain = raw.pain ?? raw.painPoints ?? raw.problem ?? "";
-  return { toolCode, name, link, category, tags, summary, pain, raw };
+  raw = raw || {};
+  // accept many possible header names from Sheets / GAS
+  const toolCode = (raw.toolCode || raw.tool_code || raw.ToolCode || raw.code || raw.toolcode || raw.Tool || raw.id || "").toString().trim();
+  const name = (raw.name || raw.title || raw.toolName || raw.tool_name || raw.ToolName || raw["工具名稱"] || "").toString().trim();
+  const summary = (raw.core || raw.summary || raw.desc || raw.description || raw["核心功能"] || "").toString().trim();
+  const pain = (raw.pain || raw.painPoints || raw.pain_points || raw.problem || raw.painpoint || raw["痛點"] || raw.pain_points_text || "").toString().trim();
+  const steps = (raw.steps || raw.flow || raw.how || raw["操作步驟"] || "").toString().trim();
+  const tips = (raw.tips || raw.hints || raw["智多星錦囊"] || "").toString().trim();
+  const link = (raw.link || raw.url || raw.href || raw["工具連結"] || "").toString().trim();
+  const category = (raw.category || raw.type || raw.group || raw["性質分類"] || "").toString().trim();
+  const tags = (raw.tags || raw.keywords || raw["標籤"] || "").toString().trim();
+  const status = (raw.status || raw.state || "").toString().trim();
+  const videoTitle = (raw.video_title || raw.videoTitle || raw["影片名稱"] || "").toString().trim();
+  const videoLink = (raw.video_link || raw.videoLink || raw["影片連結"] || "").toString().trim();
+  return { toolCode, name, summary, pain, steps, tips, link, category, tags, status, videoTitle, videoLink };
 }
 function loadToolsCache(){
   try{
@@ -203,48 +228,78 @@ function loadToolsCache(){
 }
 function saveToolsCache(list){
   try{
-    localStorage.setItem(LS_TOOLS_KEY, JSON.stringify(list.map(t=>t.raw ?? t)));
-  }catch(e){}
-}
-async function syncTools(){
-  toast("同步工具庫…");
+    localStorage.setItem(LS_TOOLS_KEY, JSON.strasync function syncTools(){
+  const msg = el("toolsMsg");
+  if(msg) msg.textContent = "同步中…";
+  const base = (settings.toolApi || TOOL_API || "").trim();
   const tries = [
-    TOOL_API,
-    withQuery(TOOL_API, { format:"json" }),
-    withQuery(TOOL_API, { output:"json" }),
-    withQuery(TOOL_API, { alt:"json" }),
-    withQuery(TOOL_API, { action:"list" }),
-    withQuery(TOOL_API, { action:"tools" }),
-    withQuery(TOOL_API, { action:"getTools" }),
-  ];
-  let lastErr = "";
+    base + (base.includes("?") ? "&" : "?") + "action=list_tools",
+    base + (base.includes("?") ? "&" : "?") + "action=tools",
+    base + (base.includes("?") ? "&" : "?") + "action=list",
+    base
+  ].filter(Boolean);
+  let last = null;
+
   for(const url of tries){
-    try{
-      const r = await fetchMaybeJson(url);
-      if(r.ok){
-        const j = r.data;
-        const arr = Array.isArray(j) ? j : (j.data || j.items || j.tools || j.rows || []);
-        if(Array.isArray(arr) && arr.length){
-          tools = arr.map(normalizeTool);
-          saveToolsCache(tools);
-          toast(`工具庫已更新 ✓（${tools.length}）`);
-          renderAll();
-          return;
-        }else{
-          lastErr = "JSON 空陣列";
-        }
-      }else{
-        lastErr = `非 JSON（${r.ct||"unknown"}）`;
-      }
-    }catch(e){
-      lastErr = String(e);
+    last = { url };
+    const r = await fetchMaybeJson(url);
+    last.status = r.status;
+    last.error = r.error || null;
+
+    if(!r.ok){
+      last.text = (r.text||"").slice(0, 300);
+      continue;
+    }
+
+    const j = r.data || {};
+    // accept multiple shapes
+    let arr = j.items || j.data || j.rows || j.result || j.tools || (j.ok && Array.isArray(j) ? j : null);
+
+    // If rows is a 2D array, convert using first row as headers
+    if(Array.isArray(arr) && arr.length && Array.isArray(arr[0])){
+      const headers = arr[0].map(h=>String(h||"").trim());
+      arr = arr.slice(1).map(row=>{
+        const o={};
+        headers.forEach((h,i)=>{ if(h) o[h]=String(row[i]??"").trim(); });
+        return o;
+      });
+    }
+
+    // Some APIs wrap as {ok:true, items:{items:[...]}}
+    if(arr && !Array.isArray(arr) && typeof arr==="object"){
+      const maybe = arr.items || arr.data || arr.rows;
+      if(Array.isArray(maybe)) arr = maybe;
+    }
+
+    if(Array.isArray(arr)){
+      // normalize + drop empty rows
+      const normalized = arr.map(normalizeTool).filter(t=>{
+        const has = (t.toolCode||"").trim() || (t.name||"").trim() || (t.link||"").trim();
+        return !!has;
+      });
+      tools = normalized;
+      saveToolsCache(normalized);
+      if(msg) msg.textContent = `✅ 工具庫已同步：${normalized.length} 筆`;
+      renderToolLists();
+      return normalized;
+    }else{
+      last.text = (r.text||"").slice(0, 300);
     }
   }
-  tools = loadToolsCache();
-  if(tools.length){
-    toast(`工具庫離線快取 ✓（${tools.length}）`);
-  }else{
-    toast(`同步失敗：${lastErr}（請檢查工具庫 API 是否「任何人」可存取，且回傳 JSON）`);
+
+  // fail / empty
+  const cached = loadToolsCache();
+  tools = cached;
+  renderToolLists();
+  if(msg){
+    const hint = cached.length ? `已改用本機快取：${cached.length} 筆` : "目前仍是 0 筆（可能是 API 回傳格式或權限/CORS 問題）";
+    msg.textContent = `⚠️ 無法同步工具庫。${hint}`;
+  }
+  // store debug
+  try{ localStorage.setItem(LS_DEBUG_KEY, JSON.stringify(last||{})); }catch(_){}
+  return cached;
+}
+ API 是否「任何人」可存取，且回傳 JSON）`);
   }
   renderAll();
 }
@@ -805,6 +860,77 @@ function exportJSON(){
   URL.revokeObjectURL(url);
 }
 
+
+/* --------------------- Manual tool import (fallback) --------------------- */
+function parseTSVTools(text){
+  const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+  if(!lines.length) return [];
+  // detect header
+  let start = 0;
+  const first = lines[0].toLowerCase();
+  if(first.includes("toolcode") || first.includes("name") || first.includes("link")){
+    start = 1;
+  }
+  const out = [];
+  for(let i=start;i<lines.length;i++){
+    const cols = lines[i].split("\t");
+    // toolCode, name, link, category, tags, summary
+    const raw = {
+      toolCode: cols[0]||"",
+      name: cols[1]||"",
+      link: cols[2]||"",
+      category: cols[3]||"",
+      tags: cols[4]||"",
+      summary: cols[5]||""
+    };
+    out.push(normalizeTool(raw));
+  }
+  return out;
+}
+function applyImportedTools(list){
+  tools = (list||[]).map(normalizeTool);
+  saveToolsCache(tools);
+  toast(`已套用工具（${tools.length}）`);
+  renderAll();
+}
+
+function bindDebugTools(){
+  const btn = document.getElementById("btnImportTools");
+  if(btn){
+    btn.addEventListener("click", ()=>{
+      const ta = document.getElementById("dbg_tool_import");
+      const text = (ta?.value||"").trim();
+      if(!text){ toast("請先貼入 JSON 或 TSV"); return; }
+      // Try JSON
+      try{
+        const j = JSON.parse(text);
+        const arr = Array.isArray(j) ? j : (j.data || j.items || j.tools || j.rows || []);
+        if(Array.isArray(arr) && arr.length){
+          applyImportedTools(arr);
+          return;
+        }
+      }catch(e){}
+      // Try TSV
+      const parsed = parseTSVTools(text);
+      if(parsed.length){
+        applyImportedTools(parsed);
+        return;
+      }
+      toast("匯入失敗：請貼 JSON 陣列或 TSV");
+    });
+  }
+  const btn2 = document.getElementById("btnClearToolsCache");
+  if(btn2){
+    btn2.addEventListener("click", ()=>{
+      localStorage.removeItem(LS_TOOLS_KEY);
+      tools = [];
+      toast("已清空工具快取");
+      renderAll();
+    });
+  }
+}
+
+
 /* --------------------- Wire up --------------------- */
 function bindTop(){
   document.querySelectorAll(".pill").forEach(b=> b.addEventListener("click", ()=> setState(b.dataset.state)));
@@ -841,6 +967,7 @@ function init(){
 
   bindTop();
   bindBottom();
+  bindDebugTools();
   tools = loadToolsCache().map(normalizeTool);
   renderAll();
   // sync tools in background
