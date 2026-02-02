@@ -16,37 +16,33 @@
       <div class="logo">A</div>
       <div class="brand-text">
         <div class="brand-title">Angel｜課程設計工作台</div>
-        <div class="brand-sub">發想 → 草稿 → 完稿｜不遮罩・可滑動・穩穩做</div>
+        <div class="brand-sub">Step 2-2｜工具庫勾選（頁內、無遮罩）</div>
       </div>
     </div>
-    <button id="btnSettings" class="btn ghost">設定</button>
+    <button id="btnReloadTools" class="btn ghost">同步工具庫</button>
   </header>
 
   <main class="container">
     <section class="card">
       <div class="card-hd">
         <div class="hd-title">狀態進度</div>
-        <div class="hd-note">不鎖流程，但給你清楚的「現在在哪」</div>
+        <div class="hd-note">發想 → 草稿 → 完稿</div>
       </div>
-
       <div class="progress">
         <button class="pill" data-state="idea"><span class="dot" id="dotIdea"></span>發想</button>
         <button class="pill" data-state="draft"><span class="dot" id="dotDraft"></span>草稿</button>
         <button class="pill" data-state="final"><span class="dot" id="dotFinal"></span>完稿</button>
       </div>
-
       <div class="statusline">
         <div>目前狀態：<span id="stateLabel" class="badge">發想</span></div>
-        <div class="mini">提示：先把骨架站穩，再往下一階段長出完整內容。</div>
       </div>
     </section>
 
     <section class="wizard">
       <div class="wizard-hd">
         <h2>四步驟 Wizard</h2>
-        <div class="mini">每一步都可展開收合；不跳頁、不遮罩、不會卡住。</div>
+        <div class="mini">I-3 已接上「工具庫 API」，可搜尋/篩選/勾選</div>
       </div>
-
       <div id="stepsArea" class="steps"></div>
     </section>
 
@@ -56,9 +52,9 @@
   <footer class="sticky">
     <div class="sticky-inner">
       <button id="btnCopyAI" class="btn primary">一鍵複製｜AI 指令</button>
-      <button id="btnCopyTSV" class="btn">一鍵複製｜TSV 一列（本狀態）</button>
+      <button id="btnCopyTSV" class="btn">一鍵複製｜TSV 一列</button>
       <button id="btnSaveLocal" class="btn">存本機草稿</button>
-      <button id="btnExportJson" class="btn">匯出 JSON（備份）</button>
+      <button id="btnExportJson" class="btn">匯出 JSON</button>
     </div>
     <div class="sticky-meta">
       <span>狀態：<b id="stateLabelBottom">發想</b></span>
@@ -67,10 +63,5 @@
   </footer>
 
   <script src="./app.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => navigator.serviceWorker.register('./sw.js'));
-    }
-  </script>
 </body>
 </html>
