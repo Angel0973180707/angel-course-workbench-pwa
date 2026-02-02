@@ -38,6 +38,35 @@ function cleanForTSV(s){
     .replace(/\t/g,"  "); // keep tsv safe
 }
 
+
+function parseDelimitedTools(text){
+  const s = String(text||"").trim();
+  if(!s) return [];
+  const hasTab = s.includes("\t");
+  const hasComma = s.includes(",");
+  if(!hasTab && !hasComma) return [];
+  const delim = hasTab ? "\t" : ",";
+  const lines = s.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length);
+  if(lines.length < 2) return [];
+  const rawHeaders = lines[0].split(delim).map(h=>h.trim());
+  const headers = rawHeaders.map(h=>{
+    const hh = h.toLowerCase();
+    if(hh.includes("toolcode") || hh.includes("tool_code") || hh.includes("code") || h.includes("工具代碼") || h.includes("工具碼")) return "toolCode";
+    if(hh === "name" || hh.includes("toolname") || hh.includes("title") || h.includes("工具名稱") || h.includes("名稱")) return "name";
+    if(hh.includes("core") || hh.includes("summary") || h.includes("核心")) return "core";
+    if(hh.includes("pain") || h.includes("痛點")) return "pain_points";
+    if(hh.includes("step") || h.includes("步驟")) return "steps";
+    if(hh.includes("tip") || h.includes("錦囊") || h.includes("提示")) return "tips";
+    if(hh.includes("link") || hh.includes("url") || h.includes("連結")) return "link";
+    if(hh.includes("category") || h.includes("分類")) return "category";
+    if(hh.includes("status") || h.includes("狀態")) return "status";
+    if(hh.includes("video") && (hh.includes("title") || h.includes("影片名稱"))) return "video_title";
+    if(hh.includes("video") && (hh.includes("link") || hh.includes("url") || h.includes("影片連結"))) return "video_link";
+    return h; // keep original
+  });
+  const rows = lines.slice(1).map(line=> line.split(delim));
+  return rowsToObjects(headers, rows);
+}
 function defaultModel(){
   return {
     state: "idea",
@@ -132,27 +161,87 @@ function rowsToObjects(headers, rows){
   });
 }
 
+function unwrapJsonLike(x){
+  // Some APIs return JSON as a string inside {data:"..."} or similar.
+  if(!x) return x;
+  if(typeof x === "string"){
+    const s = x.trim();
+    if((s.startsWith("{") && s.endsWith("}")) || (s.startsWith("[") && s.endsWith("]"))){
+      try{ return JSON.parse(s); }catch(_){ return x; }
+    }
+  }
+  if(typeof x === "object"){
+    // common string-wrapped payload keys
+    const candidates = ["data","payload","body","content","result","response","json"];
+    for(const k of candidates){
+      if(typeof x[k] === "string"){
+        const u = unwrapJsonLike(x[k]);
+        if(typeof u === "object") return u;
+      }
+    }
+  }
+  return x;
+}
+
+function deepFindArray(obj, depth=0){
+  if(!obj || depth>4) return null;
+  if(Array.isArray(obj)) return obj;
+  if(typeof obj !== "object") return null;
+  for(const k of Object.keys(obj)){
+    const v = obj[k];
+    if(Array.isArray(v)) return v;
+    const inner = deepFindArray(v, depth+1);
+    if(inner) return inner;
+  }
+  return null;
+}
+
+function looksLikeToolRows(arr){
+  if(!Array.isArray(arr) || !arr.length) return false;
+  const a0 = arr[0];
+  if(Array.isArray(a0)) return true; // might be rows
+  if(typeof a0 === "object" && a0){
+    const keys = Object.keys(a0).map(s=>s.toLowerCase());
+    return keys.some(k=>["toolcode","tool_code","code","name","toolname","title","link","url","category"].includes(k));
+  }
+  return false;
+}
+
 function extractArrayFromAnyPayload(j){
   if(!j) return [];
+  j = unwrapJsonLike(j);
+
   // direct array
   if(Array.isArray(j)) return j;
+
   // common wrappers
   if(Array.isArray(j.data)) return j.data;
   if(Array.isArray(j.items)) return j.items;
+  if(Array.isArray(j.tools)) return j.tools;
+  if(Array.isArray(j.list)) return j.list;
+
+  // rows+headers style
   if(Array.isArray(j.rows) && Array.isArray(j.headers)){
     return rowsToObjects(j.headers, j.rows);
   }
   if(j.data && Array.isArray(j.data.rows) && Array.isArray(j.data.headers)){
     return rowsToObjects(j.data.headers, j.data.rows);
   }
+
   // Google Visualization style? {table:{cols, rows}}
   if(j.table && Array.isArray(j.table.rows) && Array.isArray(j.table.cols)){
     const headers = j.table.cols.map(c=>c.label||c.id||"");
     const rows = j.table.rows.map(rr=> rr.c ? rr.c.map(c=>c ? c.v : "") : []);
     return rowsToObjects(headers, rows);
   }
+
+  // GAS often returns {ok:true, data:{values:[...]}} or similar
+  const deep = deepFindArray(j);
+  if(looksLikeToolRows(deep)) return deep;
+
   return [];
 }
+
 
 function loadToolsCache(){
   try{
@@ -184,8 +273,18 @@ async function syncToolsOnce(force=false){
     const text = await res.text();
     let j = null;
     try{ j = JSON.parse(text); }catch(_){ j = null; }
-    const arr = extractArrayFromAnyPayload(j);
-    const normalized = arr.map(normalizeToolObject).filter(t=>t.toolCode||t.name);
+
+    // 1) JSON payload (many possible wrappers)
+    let arr = extractArrayFromAnyPayload(j);
+
+    // 2) If still empty, try delimited text (TSV/CSV)
+    if(!arr || !arr.length){
+      arr = parseDelimitedTools(text);
+    }
+
+    // 3) Normalize
+    const normalized = (arr||[]).map(normalizeToolObject).filter(t=>t.toolCode||t.name);
+
     if(normalized.length){
       tools = normalized;
       saveToolsCache(normalized);
@@ -194,6 +293,10 @@ async function syncToolsOnce(force=false){
       renderToolLists();
       return;
     }
+
+    // debug hint (store snippet for user screenshot if needed)
+    try{ localStorage.setItem("angel_tools_last_response_snippet", text.slice(0, 800)); }catch(_){}
+
     // if API returns plain text, keep cache
     if(tools.length){
       toolsReady = true;
@@ -1041,6 +1144,14 @@ function init(){
   $("btnReloadTools").addEventListener("click", async ()=>{
     await syncToolsOnce(true);
   });
+
+  $("btnShowToolsDebug").addEventListener("click", ()=>{
+    let s = "";
+    try{ s = localStorage.getItem("angel_tools_last_response_snippet") || ""; }catch(_){}
+    if(!s){ alert("目前沒有工具回傳紀錄（請先按一次『同步工具庫』）。"); return; }
+    alert("工具庫 API 回傳（前 800 字）：\n\n" + s);
+  });
+
 
   $("btnSaveLocal").addEventListener("click", ()=> saveLocal(false));
 
