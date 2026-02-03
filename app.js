@@ -1,1081 +1,316 @@
-/* Angel Course Workbench - GitHub Pages Full Overwrite
-   - Green theme
-   - Flexible episodes / kinds
-   - Tools API sync + cache
-   - Course API optional sync (best-effort; depends on your GAS)
-   - Local drafts + JSON export
-   - One-click AI prompt + TSV row (auto clean newlines)
-*/
-
-const DEFAULTS = {
-  toolsApi: 'https://script.google.com/macros/s/AKfycbwecHTILAMuk5Izr_yF9wfce_qNjxuy28XuvpDzK0LZ4Wszmw7zI3xve8jeLghzveWbXA/exec',
-  courseApi: 'https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec'
-};
-
-const LS_KEYS = {
-  settings: 'angel_course_workbench_settings_v1',
-  draft: 'angel_course_workbench_draft_v1',
-  toolsCache: 'angel_tools_cache_v1'
-};
-
-const SHEET_BY_STATE = {
-  idea: '發想',
-  draft: '草稿',
-  final: '幸福教養課程管理'
-};
-
-const UI = {};
-let tools = [];
-let pickerMode = 'main'; // 'main' or 'subs'
-let selectedMainTool = null;
-let selectedSubTools = [];
-let finals = [];
-let lastApiList = [];
-
-function $(id){ return document.getElementById(id); }
-
-function toast(msg){
-  UI.toast.textContent = msg;
-  UI.toast.style.display = 'block';
-  clearTimeout(UI._toastT);
-  UI._toastT = setTimeout(()=> UI.toast.style.display='none', 1600);
+(()=>{'use strict';
+const TOOLS_API_URL="https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec?sheet=%E5%B7%A5%E5%85%B7%E5%BA%AB%E5%AD%98%E7%AE%A1%E7%90%86&format=tools";
+const COURSE_API_BASE="https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec";
+const $=s=>document.querySelector(s),$$=s=>Array.from(document.querySelectorAll(s));
+const st={tools:[],cats:[],courses:[],singles:[],picks:new Set(),currentItem:null};
+const toastEl=$("#toast");
+const toast=m=>{toastEl.textContent=m;toastEl.classList.add("on");clearTimeout(toastEl._t);toastEl._t=setTimeout(()=>toastEl.classList.remove("on"),1600)};
+const safe=v=>v==null?"":String(v);const norm=s=>safe(s).trim();
+const setL=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const getL=(k,f)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):f}catch(e){return f}};
+const esc=safeStr=>safe(safeStr).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
+async function jget(url){const r=await fetch(url,{cache:"no-store"});if(!r.ok)throw new Error("HTTP "+r.status);return await r.json();}
+function courseUrl(p){const u=new URL(COURSE_API_BASE);Object.entries(p).forEach(([k,v])=>{if(v!==""&&v!=null)u.searchParams.set(k,String(v))});return u.toString();}
+function isSingle(x){
+  const sch=norm(x.schedule_mode).toLowerCase();
+  const type=norm(x.type).toLowerCase();
+  if(sch==="single") return true;
+  if(type.includes("single")||type.includes("talk")||type.includes("event")||type.includes("class")) return true;
+  const hasDur=norm(x.duration_min)||norm(x.single_duration);
+  const hasModules=norm(x.module_sessions);
+  return !!hasDur && !hasModules;
 }
-
-function safeStr(v){
-  if (v === null || v === undefined) return '';
-  return String(v);
-}
-
-function nowIso(){
-  return new Date().toISOString();
-}
-
-function loadSettings(){
-  const raw = localStorage.getItem(LS_KEYS.settings);
-  let s = {};
-  try{ s = raw ? JSON.parse(raw) : {}; }catch(e){ s = {}; }
-  s.toolsApi = s.toolsApi || DEFAULTS.toolsApi;
-  s.courseApi = s.courseApi || DEFAULTS.courseApi;
-  return s;
-}
-
-function saveSettings(s){
-  localStorage.setItem(LS_KEYS.settings, JSON.stringify(s));
-}
-
-function getForm(){
-  const state = UI.stateSelect.value;
-  const kind = UI.kindSelect.value;
-  const kindName = (kind === 'other') ? safeStr(UI.kindOther.value).trim() : UI.kindSelect.options[UI.kindSelect.selectedIndex].text;
-
-  const episodes = parseInt(UI.episodes.value || '1', 10);
-  const durationMin = parseInt(UI.durationMin.value || '0', 10);
-  const capacity = parseInt(UI.capacity.value || '0', 10);
-
-  const outlineItems = Array.from(document.querySelectorAll('.outline-item')).map((el)=> safeStr(el.value).trim());
-
-  const payload = {
-    id: makeId_(),
-    title: safeStr(UI.title.value).trim(),
-    type: kindName,
-    status: (state === 'final') ? 'ready' : state, // per spec: final defaults ready
-    version: 'v1',
-    owner: safeStr(UI.owner.value).trim(),
-    audience: safeStr(UI.audience.value).trim(),
-    duration_min: durationMin || '',
-    capacity: capacity || '',
-    tags: safeStr(UI.tags.value).trim(),
-    episodes: episodes || '',
-    kind: kind,
-    kindName: kindName,
-    closing_line: safeStr(UI.closingLine.value).trim(),
-    framework_text: safeStr(UI.frameworkText.value).trim(),
-    outline_items: outlineItems,
-    main_tool: selectedMainTool,
-    sub_tools: selectedSubTools.slice(),
-    summary: safeStr(UI.summary.value).trim(),
-    objectives: safeStr(UI.objectives.value).trim(),
-    materials: safeStr(UI.materials.value).trim(),
-    notes: safeStr(UI.notes.value).trim(),
-    created_at: nowIso(),
-    updated_at: nowIso()
-  };
-
-  // Derived links field (for TSV)
-  payload.links = buildLinksText(payload);
-
-  // outline text
-  payload.outline = buildOutlineText(payload);
-
-  return payload;
-}
-
-function applyForm(data){
-  // Apply safe
-  UI.title.value = safeStr(data.title || '');
-  UI.audience.value = safeStr(data.audience || '');
-  UI.tags.value = safeStr(data.tags || '');
-  UI.owner.value = safeStr(data.owner || '');
-  UI.closingLine.value = safeStr(data.closing_line || '');
-  UI.frameworkText.value = safeStr(data.framework_text || '');
-
-  // Kind + schedule
-  const kind = data.kind || guessKindFromType_(data.type);
-  UI.kindSelect.value = kind;
-  UI.kindOther.value = safeStr(data.kindName || '');
-  onKindChange();
-
-  UI.episodes.value = safeStr(data.episodes || UI.episodes.value);
-  UI.durationMin.value = safeStr(data.duration_min || UI.durationMin.value);
-  UI.capacity.value = safeStr(data.capacity || UI.capacity.value);
-
-  // state
-  if (data.status === 'ready') UI.stateSelect.value = 'final';
-  else if (data.status === 'draft') UI.stateSelect.value = 'draft';
-  else if (data.status === 'idea') UI.stateSelect.value = 'idea';
-  else UI.stateSelect.value = UI.stateSelect.value;
-
-  onStateChange();
-
-  // tools
-  selectedMainTool = data.main_tool || null;
-  selectedSubTools = (data.sub_tools || []).slice();
-  renderSelectedTools();
-
-  // outline
-  buildOutlineInputs(parseInt(UI.episodes.value||'1',10));
-  const items = data.outline_items || [];
-  const inputs = document.querySelectorAll('.outline-item');
-  inputs.forEach((inp, i)=> { inp.value = safeStr(items[i] || ''); });
-
-  // draft extras
-  UI.summary.value = safeStr(data.summary || '');
-  UI.objectives.value = safeStr(data.objectives || '');
-  UI.materials.value = safeStr(data.materials || '');
-  UI.notes.value = safeStr(data.notes || '');
-}
-
-function guessKindFromType_(type){
-  const t = safeStr(type).toLowerCase();
-  if (t.includes('演講')) return 'lecture';
-  if (t.includes('模組') || t.includes('課程') && t.includes('堂')) return 'module';
-  if (t.includes('單場活動')) return 'single_event';
-  if (t.includes('單場')) return 'single_class';
-  return 'other';
-}
-
-function makeId_(){
-  // stable-ish id per save: timestamp + random
-  const t = Date.now().toString(36);
-  const r = Math.random().toString(36).slice(2,6);
-  return `c_${t}_${r}`;
-}
-
-function normalizeNewlines(text){
-  const s = safeStr(text);
-  // Replace CRLF + LF with single space, trim redundant
-  return s.replace(/\r\n|\n|\r/g, ' ').replace(/\s{2,}/g,' ').trim();
-}
-
-function tsvSafe(text){
-  const s = UI.autoCleanNewlines.checked ? normalizeNewlines(text) : safeStr(text);
-  return s.replace(/\t/g,' ').trim();
-}
-
-function buildOutlineText(data){
-  const items = (data.outline_items || []).filter(x => safeStr(x).trim());
-  if (!items.length) return '';
-  const lines = items.map((x, i)=> `${i+1}. ${x}`);
-  return lines.join('\n');
-}
-
-function buildLinksText(data){
-  const chunks = [];
-  if (data.main_tool && data.main_tool.name){
-    chunks.push(`${data.main_tool.name}｜${data.main_tool.link || ''}`);
-  }
-  (data.sub_tools || []).forEach(t=>{
-    chunks.push(`${t.name}｜${t.link || ''}`);
-  });
-  // remove dup
-  const uniq = Array.from(new Set(chunks.filter(Boolean)));
-  return uniq.join('\n');
-}
-
-function buildToolLabel(t){
-  if (!t) return '';
-  const code = t.toolCode || t.tool_code || t.code || '';
-  const name = t.name || '';
-  return code ? `${code} ${name}`.trim() : name;
-}
-
-function renderSelectedTools(){
-  UI.mainTool.value = selectedMainTool ? buildToolLabel(selectedMainTool) : '';
-  UI.subTools.value = selectedSubTools.length ? selectedSubTools.map(buildToolLabel).join('、') : '';
-}
-
-function buildOutlineInputs(n){
-  const count = Math.max(1, Math.min(40, n || 1));
-  UI.outlineList.innerHTML = '';
-  for (let i=0;i<count;i++){
-    const wrap = document.createElement('div');
-    wrap.className = 'field';
-    const lab = document.createElement('label');
-    lab.textContent = `第${i+1}堂｜一句話大綱`;
-    const inp = document.createElement('input');
-    inp.className = 'outline-item';
-    inp.placeholder = '一句話就好，先站穩骨架。';
-    wrap.appendChild(lab);
-    wrap.appendChild(inp);
-    UI.outlineList.appendChild(wrap);
-  }
-}
-
-function updateStatusPills(){
-  const state = UI.stateSelect.value;
-  const steps = [
-    {key:'idea', label:'① 發想'},
-    {key:'draft', label:'② 草稿'},
-    {key:'final', label:'③ 完稿'}
-  ];
-  UI.statusPills.innerHTML='';
-  steps.forEach(s=>{
-    const span=document.createElement('span');
-    span.className='pill';
-    if (s.key === state) span.classList.add('doing');
-    if (state === 'draft' && s.key === 'idea') span.classList.add('ok');
-    if (state === 'final' && (s.key === 'idea' || s.key === 'draft')) span.classList.add('ok');
-    if (!(span.classList.contains('ok') || span.classList.contains('doing'))) span.classList.add('todo');
-    span.textContent = span.classList.contains('ok') ? `✅ ${s.label}` : (span.classList.contains('doing') ? `🟡 ${s.label}` : `⬜ ${s.label}`);
-    UI.statusPills.appendChild(span);
-  });
-
-  UI.stateHint.textContent = (
-    state === 'idea' ? '發想：先把「這堂課是什麼 / 為誰做 / 工具配方 / 粗架構」站穩。' :
-    state === 'draft' ? '草稿：補齊目標、節律、每堂內容、教材與作業，能試教、可調整。' :
-    '完稿：對外提案版＋上架素材（PPT大綱/講稿/口播/主持稿），進正式課程管理表。'
-  );
-}
-
-function updateWizardDots(){
-  // Keep simple: based on filledness
-  const data = getForm();
-  const score = [
-    data.title && data.audience,
-    data.closing_line,
-    data.main_tool,
-    (data.outline_items || []).some(x=>safeStr(x).trim())
-  ].map(Boolean);
-
-  [UI.dot1,UI.dot2,UI.dot3,UI.dot4].forEach((d,i)=>{
-    d.classList.remove('active','done');
-    if (score[i]) d.classList.add('done');
-  });
-
-  const firstIncomplete = score.findIndex(v=>!v);
-  const idx = (firstIncomplete === -1) ? 3 : firstIncomplete;
-  [UI.dot1,UI.dot2,UI.dot3,UI.dot4][idx].classList.add('active');
-}
-
-function onKindChange(){
-  const kind = UI.kindSelect.value;
-  UI.kindOtherWrap.style.display = (kind === 'other') ? 'block' : 'none';
-
-  if (kind === 'module'){
-    UI.episodesLabel.textContent = '模組堂數（episodes）';
-    UI.durationLabel.textContent = '每堂時間（分鐘）';
-    UI.episodes.disabled = false;
-    UI.episodes.value = UI.episodes.value || '8';
-  } else {
-    UI.episodesLabel.textContent = '集數（episodes）';
-    UI.durationLabel.textContent = '時間（分鐘）';
-    // for lecture/single -> episodes forced 1
-    UI.episodes.value = '1';
-    UI.episodes.disabled = true;
-  }
-
-  buildOutlineInputs(parseInt(UI.episodes.value||'1',10));
-  updateWizardDots();
-}
-
-function onEpisodesChange(){
-  buildOutlineInputs(parseInt(UI.episodes.value||'1',10));
-  updateWizardDots();
-}
-
-function onStateChange(){
-  const state = UI.stateSelect.value;
-  UI.draftExtra.style.display = (state === 'draft' || state === 'final') ? 'block' : 'none';
-  updateStatusPills();
-  updateWizardDots();
-}
-
-function getAiPrompt(){
-  const state = UI.stateSelect.value;
-  const stateZh = (state === 'idea') ? '發想' : (state === 'draft' ? '草稿' : '完稿');
-
-  const data = getForm();
-  const kindText = data.kindName || '';
-
-  const mainName = data.main_tool ? (data.main_tool.name || '') : '';
-  const mainLink = data.main_tool ? (data.main_tool.link || '') : '';
-  const subs = (data.sub_tools || []).map(t => `${t.name || ''}｜${t.link || ''}`).join('\n');
-
-  const framework = data.framework_text || data.outline || '';
-  const episodesText = (data.kind === 'module')
-    ? `${data.episodes}堂｜每堂${data.duration_min}分鐘｜${data.capacity}人`
-    : `1場｜${data.duration_min}分鐘｜${data.capacity}人`;
-
-  const template = `
-你是「天使笑長」的協作夥伴。請用溫柔、清楚、不說教的語氣，幫我把課程從「${stateZh}」往下一階段完成。
-
-0｜已輸入資料（請以此為準，不要改名、不重問）
-課程名稱：${data.title}
-類型：${kindText}
-對象：${data.audience}
-集數/時長/人數：${episodesText}
-關鍵痛點/標籤：${data.tags}
-主工具：${mainName}｜${mainLink}
-副工具：
-${subs || '（尚未選）'}
-核心流程架構：${framework}
-結尾定錨句：${data.closing_line}
-
-1｜請你輸出三份成果（務必分段標題）
-A) 活動/課程規劃（定位、目標、節律、適用場域）
-B) 詳細設計內容（每堂/每場內容、現場流程、練習、作業、教材）
-C) 回饋與追蹤方案（每週追蹤、回饋題、工具使用節律）
-
-2｜依目前狀態輸出格式（很重要）
-若 ${stateZh}=發想：請先產出「最小可行的完整課堂企劃」＋「可試做的教材與作業」，不要寫太長，但要完整可行。
-若 ${stateZh}=草稿：請補齊每堂/每場「目標/工具/練習/作業/教材」，可直接拿去試教。
-若 ${stateZh}=完稿：請產出「對外提案版」＋「PPT大綱」＋「逐頁講稿」＋「口播稿」＋「演說/主持稿」＋「教材與作業包」。
-
-3｜最後請再輸出：表單橫向一列（可貼入）
-請依下列表頭輸出一列（用 tab 分隔）：
-{id, title, type, status, version, owner, audience, duration_min, capacity, tags, summary, objectives, outline, materials, links, assets, notes, created_at, updated_at}
-
-若 ${stateZh}=發想：summary/objectives/outline 可短版
-若 ${stateZh}=草稿：summary/objectives/outline 完整版
-若 ${stateZh}=完稿：全部欄位給可上架的定稿版（status 預設 ready）
-`.trim();
-
-  return template;
-}
-
-function getTsvRow(){
-  const data = getForm();
-
-  const row = {
-    id: data.id,
-    title: data.title,
-    type: data.type,
-    status: data.status,
-    version: data.version,
-    owner: data.owner,
-    audience: data.audience,
-    duration_min: data.duration_min,
-    capacity: data.capacity,
-    tags: data.tags,
-    summary: data.summary,
-    objectives: data.objectives,
-    outline: data.outline,
-    materials: data.materials,
-    links: data.links,
-    assets: '',
-    notes: data.notes,
-    created_at: data.created_at,
-    updated_at: data.updated_at
-  };
-
-  const header = ['id','title','type','status','version','owner','audience','duration_min','capacity','tags','summary','objectives','outline','materials','links','assets','notes','created_at','updated_at'];
-
-  const cells = header.map(k => tsvSafe(row[k]));
-  return cells.join('\t');
-}
-
-async function copyToClipboard(text){
-  try{
-    await navigator.clipboard.writeText(text);
-    toast('已複製');
-  }catch(err){
-    // fallback
-    const ta=document.createElement('textarea');
-    ta.value=text;
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    ta.remove();
-    toast('已複製');
-  }
-}
-
-function saveLocal(){
-  const data = getForm();
-  localStorage.setItem(LS_KEYS.draft, JSON.stringify(data));
-  toast('已存本機草稿');
-}
-
-function loadLocal(){
-  const raw = localStorage.getItem(LS_KEYS.draft);
-  if (!raw){ toast('本機尚無草稿'); return; }
-  try{
-    const data = JSON.parse(raw);
-    applyForm(data);
-    toast('已叫出本機草稿');
-  }catch(e){
-    toast('草稿格式錯誤');
-  }
-}
-
-function clearLocal(){
-  localStorage.removeItem(LS_KEYS.draft);
-  toast('已清空本機草稿');
-}
-
-function exportJson(){
-  const data = getForm();
-  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href=url;
-  a.download = `angel-course-${UI.stateSelect.value}-${Date.now()}.json`;
-  a.click();
-  setTimeout(()=>URL.revokeObjectURL(url), 800);
-}
-
-function parseToolsApiResponse(obj){
-  // Accept multiple shapes:
-  // {ok:true, tools:[...]}
-  // {ok:true, items:[...]}
-  // [...]
-  if (Array.isArray(obj)) return obj;
-  if (!obj) return [];
-  if (Array.isArray(obj.tools)) return obj.tools;
-  if (Array.isArray(obj.items)) return obj.items;
-  if (Array.isArray(obj.data)) return obj.data;
-  if (obj.ok && obj.tools) return obj.tools;
-  return [];
-}
-
-function normalizeTool(t){
-  const toolCode = safeStr(t.toolCode || t.tool_code || t.code || t.id || '').trim();
-  const name = safeStr(t.name || t.title || t.toolName || '').trim();
-  const core = safeStr(t.core || t.summary || '').trim();
-  const pain_points = safeStr(t.pain_points || t.tags || t.painPoints || '').trim();
-  const chapters = safeStr(t.chapters || '').trim();
-  const steps = safeStr(t.steps || '').trim();
-  const tips = safeStr(t.tips || '').trim();
-  const link = safeStr(t.link || t.url || '').trim();
-  const category = safeStr(t.category || '').trim();
-  const status = safeStr(t.status || 'active').trim().toLowerCase();
-  const video_title = safeStr(t.video_title || '').trim();
-  const video_link = safeStr(t.video_link || '').trim();
-
-  return { toolCode, name, core, pain_points, chapters, steps, tips, link, category, status, video_title, video_link };
-}
-
-async function fetchTools(force=false){
-  const settings = loadSettings();
-
-  if (!force){
-    const cached = localStorage.getItem(LS_KEYS.toolsCache);
-    if (cached){
-      try{
-        const obj = JSON.parse(cached);
-        tools = (obj.tools || []).map(normalizeTool);
-        renderTools();
-      }catch(e){}
-    }
-  }
-
-  try{
-    const url = new URL(settings.toolsApi);
-    // read-only list
-    if (!url.searchParams.get('mode')) url.searchParams.set('mode','tools');
-    const res = await fetch(url.toString(), {method:'GET'});
-    const txt = await res.text();
-    const obj = JSON.parse(txt);
-    const list = parseToolsApiResponse(obj).map(normalizeTool).filter(t=>t.status==='active');
-    tools = list;
-    localStorage.setItem(LS_KEYS.toolsCache, JSON.stringify({updated_at: nowIso(), tools}));
-    renderTools();
-    toast('工具庫已同步');
-  }catch(err){
-    toast('工具同步失敗：將使用快取');
-  }
-}
-
-function filterTools(list, {q='', prefix='', category=''}){
-  const qq = safeStr(q).trim().toLowerCase();
-  const pf = safeStr(prefix).trim().toUpperCase();
-  const cat = safeStr(category).trim().toLowerCase();
-
-  return list.filter(t=>{
-    if (pf){
-      const code = safeStr(t.toolCode).toUpperCase();
-      if (!code.startsWith(pf + '-')) return false;
-    }
-    if (cat){
-      if (!safeStr(t.category).toLowerCase().includes(cat)) return false;
-    }
-    if (qq){
-      const hay = [
-        t.toolCode, t.name, t.core, t.pain_points, t.category, t.steps, t.tips
-      ].join(' ').toLowerCase();
-      if (!hay.includes(qq)) return false;
-    }
-    return true;
-  });
-}
-
 function renderTools(){
-  const q = UI.toolsSearch.value;
-  const prefix = UI.toolsPrefix.value;
-  const cat = UI.toolsCategory.value;
-
-  const list = filterTools(tools, {q, prefix, category:cat});
-  UI.toolsList.innerHTML = '';
-  if (!list.length){
-    UI.toolsList.innerHTML = `<div class="mini">目前沒有符合條件的工具。你可以按「同步工具庫」。</div>`;
-    return;
-  }
-  list.forEach(t=>{
-    const div=document.createElement('div');
-    div.className='tool-item';
-    div.innerHTML = `
-      <div class="title">${escapeHtml(t.toolCode)}｜${escapeHtml(t.name)}</div>
-      <div class="meta">${escapeHtml(t.category)} · ${escapeHtml(t.core)}</div>
-      <div class="meta">${escapeHtml(t.pain_points)}</div>
-      <div class="actions">
-        <a class="btn small" href="${escapeAttr(t.link)}" target="_blank" rel="noopener">開啟</a>
-        <button class="btn small" data-pick="${escapeAttr(t.toolCode)}">加入副工具</button>
-        <button class="btn small" data-main="${escapeAttr(t.toolCode)}">設為主工具</button>
-      </div>
-    `;
-    div.querySelector('[data-pick]').addEventListener('click', ()=>{
-      addSubToolByCode(t.toolCode);
-      toast('已加入副工具');
-    });
-    div.querySelector('[data-main]').addEventListener('click', ()=>{
-      setMainToolByCode(t.toolCode);
-      toast('已設為主工具');
-    });
-    UI.toolsList.appendChild(div);
+  const q=norm($("#tools-q").value).toLowerCase();
+  const cat=$("#tools-cat").value;
+  let items=st.tools.slice();
+  if(cat) items=items.filter(x=>norm(x.category||x.tool_category||x["性質分類"])===cat);
+  if(q) items=items.filter(x=>`${safe(x.toolCode)} ${safe(x.toolName)} ${safe(x.core)} ${safe(x.tags)}`.toLowerCase().includes(q));
+  const box=$("#tools-list"); box.innerHTML=items.length?"":'<div class="hint">目前沒有資料（或被篩選掉了）。</div>';
+  items.forEach(x=>{
+    const id=norm(x.toolCode||x.id), name=norm(x.toolName||x.title||"未命名工具");
+    const core=norm(x.core||x["核心功能"]||"");
+    const tags=norm(x.tags||""); const link=norm(x.link||x.toolLink||x["工具連結"]||"");
+    const catT=norm(x.category||x.tool_category||x["性質分類"]||"");
+    box.insertAdjacentHTML("beforeend",`
+      <div class="item">
+        <div class="t">${esc(name)}</div>
+        <div class="meta">${id?("ID："+esc(id)):""}</div>
+        ${core?`<div class="meta"><b>核心</b>：${esc(core)}</div>`:""}
+        <div class="badges">
+          ${catT?`<span class="badge">${esc(catT)}</span>`:""}
+          ${tags?`<span class="badge">${esc(tags)}</span>`:""}
+          ${link?`<a class="badge dark" href="${esc(link)}" target="_blank" rel="noopener">開啟</a>`:""}
+        </div>
+      </div>`);
   });
 }
-
-function addSubToolByCode(code){
-  const t = tools.find(x=>x.toolCode===code);
-  if (!t) return;
-  if (selectedSubTools.some(x=>x.toolCode===code)) return;
-  selectedSubTools.push(t);
-  renderSelectedTools();
+function renderCats(){
+  const sel=$("#tools-cat");
+  sel.innerHTML='<option value="">全部分類</option>'+st.cats.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join("");
 }
-
-function setMainToolByCode(code){
-  const t = tools.find(x=>x.toolCode===code);
-  if (!t) return;
-  selectedMainTool = t;
-  renderSelectedTools();
-}
-
-function openToolModal(mode){
-  pickerMode = mode;
-  UI.modalTitle.textContent = (mode === 'main') ? '選主工具（單選）' : '選副工具（多選）';
-  UI.modalSearch.value = '';
-  UI.modalPrefix.value = '';
-  UI.modalCategory.value = '';
-  UI.modalBg.style.display='block';
-  UI.toolModal.style.display='block';
-  renderModalTools();
-}
-
-function closeToolModal(){
-  UI.modalBg.style.display='none';
-  UI.toolModal.style.display='none';
-}
-
-function renderModalTools(){
-  const q = UI.modalSearch.value;
-  const prefix = UI.modalPrefix.value;
-  const cat = UI.modalCategory.value;
-
-  const list = filterTools(tools, {q, prefix, category:cat});
-  UI.modalTools.innerHTML='';
-  if (!list.length){
-    UI.modalTools.innerHTML = `<div class="mini">沒有找到工具。請先到「工具庫存管理」同步。</div>`;
-    return;
-  }
-
-  list.forEach(t=>{
-    const div=document.createElement('div');
-    div.className='tool-item';
-    const isMain = selectedMainTool && selectedMainTool.toolCode === t.toolCode;
-    const isSub = selectedSubTools.some(x=>x.toolCode===t.toolCode);
-
-    const pickLabel = (pickerMode === 'main') ? (isMain ? '已選' : '選它') : (isSub ? '已勾' : '勾選');
-    const badge = `<span class="badge ${t.status==='active'?'active':''}">${escapeHtml(t.toolCode)}</span>`;
-
-    div.innerHTML = `
-      <div class="title">${badge} ${escapeHtml(t.name)}</div>
-      <div class="meta">${escapeHtml(t.category)} · ${escapeHtml(t.core)}</div>
-      <div class="meta">${escapeHtml(t.pain_points)}</div>
-      <div class="actions">
-        <a class="btn small" href="${escapeAttr(t.link)}" target="_blank" rel="noopener">開啟</a>
-        <button class="btn small" data-select="${escapeAttr(t.toolCode)}">${pickLabel}</button>
-      </div>
-    `;
-    div.querySelector('[data-select]').addEventListener('click', ()=>{
-      if (pickerMode === 'main'){
-        selectedMainTool = t;
-      } else {
-        if (selectedSubTools.some(x=>x.toolCode===t.toolCode)){
-          selectedSubTools = selectedSubTools.filter(x=>x.toolCode!==t.toolCode);
-        } else {
-          selectedSubTools.push(t);
-        }
-      }
-      renderSelectedTools();
-      renderModalTools();
-    });
-
-    UI.modalTools.appendChild(div);
+function renderCourses(){
+  const q=norm($("#course-q").value).toLowerCase();
+  const status=$("#course-status").value;
+  let items=st.courses.slice();
+  if(q) items=items.filter(x=>`${safe(x.id)} ${safe(x.title)} ${safe(x.tags)} ${safe(x.summary)}`.toLowerCase().includes(q));
+  if(status) items=items.filter(x=>norm(x.status).toLowerCase()===status.toLowerCase());
+  const box=$("#courses-list"); box.innerHTML=items.length?"":'<div class="hint">目前沒有資料（或被篩選掉了）。</div>';
+  items.forEach(x=>{
+    const id=norm(x.id), title=norm(x.title||"未命名");
+    const type=norm(x.type), stt=norm(x.status);
+    const tags=norm(x.tags||""); const sum=norm(x.summary||"");
+    box.insertAdjacentHTML("beforeend",`
+      <div class="item">
+        <div class="t">${esc(title)}</div>
+        <div class="meta">${esc(id)} ${type?("｜"+esc(type)):""} ${stt?("｜"+esc(stt)):""}</div>
+        ${tags?`<div class="meta"><b>tags</b>：${esc(tags)}</div>`:""}
+        ${sum?`<div class="meta"><b>摘要</b>：${esc(sum)}</div>`:""}
+        <div class="badges">
+          <button class="btn ghost copy" data-copytext="${esc(id)}">複製 ID</button>
+          <button class="btn ghost" data-act="view" data-id="${esc(id)}">查看 JSON</button>
+          <button class="btn ghost" data-act="script" data-id="${esc(id)}">文稿</button>
+        </div>
+      </div>`);
   });
 }
-
-function escapeHtml(s){
-  return safeStr(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+function renderBuilder(){
+  const q=norm($("#builder-q").value).toLowerCase();
+  let items=st.singles.slice();
+  if(q) items=items.filter(x=>`${safe(x.id)} ${safe(x.title)} ${safe(x.tags)} ${safe(x.summary)}`.toLowerCase().includes(q));
+  const box=$("#builder-list"); box.innerHTML=items.length?"":'<div class="hint">找不到符合的「單場完稿」。</div>';
+  items.forEach(x=>{
+    const id=norm(x.id), title=norm(x.title||"未命名"), tags=norm(x.tags||"");
+    const checked=st.picks.has(id)?"checked":"";
+    box.insertAdjacentHTML("beforeend",`
+      <div class="item">
+        <label class="pick">
+          <input type="checkbox" data-pick="${esc(id)}" ${checked}/>
+          <div>
+            <div class="t">${esc(title)}</div>
+            <div class="meta">${esc(id)}</div>
+            ${tags?`<div class="meta"><b>tags</b>：${esc(tags)}</div>`:""}
+          </div>
+        </label>
+      </div>`);
+  });
+  $$("[data-pick]").forEach(cb=>cb.addEventListener("change",()=>{
+    const id=cb.dataset.pick;
+    cb.checked?st.picks.add(id):st.picks.delete(id);
+    setL("angel_picks",Array.from(st.picks));
+  }));
 }
-function escapeAttr(s){
-  return escapeHtml(s).replace(/"/g,'&quot;');
-}
-
-async function apiPing(url){
+async function loadTools(){
   try{
-    const u = new URL(url);
-    u.searchParams.set('mode','ping');
-    const res = await fetch(u.toString(), {method:'GET'});
-    const txt = await res.text();
-    return {ok:true, text:txt};
+    const data=await jget(TOOLS_API_URL);
+    const list=Array.isArray(data)?data:(data.items||data.data||data.tools||[]);
+    st.tools=list||[]; setL("cache_tools",st.tools);
+    const cats=new Set(); st.tools.forEach(x=>{const c=norm(x.category||x.tool_category||x["性質分類"]); if(c)cats.add(c);});
+    st.cats=Array.from(cats).sort((a,b)=>a.localeCompare(b,'zh-Hant')); setL("cache_cats",st.cats);
+    renderCats(); renderTools();
   }catch(e){
-    return {ok:false, text:String(e)};
+    st.tools=getL("cache_tools",[]); st.cats=getL("cache_cats",[]); renderCats(); renderTools();
+    toast("工具庫存：改用上次快取（可能是網路或權限）");
   }
 }
-
-async function syncToBackend(){
-  const settings = loadSettings();
-  const state = UI.stateSelect.value;
-  const sheet = SHEET_BY_STATE[state];
-  const row = getTsvRow();
-
-  UI.syncLog.textContent = '同步中...';
-
-  // Best-effort: try POST JSON first
-  const payload = {
-    action: 'append',
-    sheet: sheet,
-    tsv: row,
-    state: state,
-    ts: nowIso()
+async function loadCourses(state){
+  try{
+    const data=await jget(courseUrl({mode:"list",state,limit:300}));
+    st.courses=data.items||[]; setL("cache_courses_"+state,st.courses);
+    renderCourses();
+    if(state==="final"){ st.singles=st.courses.filter(isSingle); setL("cache_singles",st.singles); renderBuilder(); }
+  }catch(e){
+    st.courses=getL("cache_courses_"+state,[]); renderCourses();
+    if(state==="final"){ st.singles=getL("cache_singles",[]).filter(isSingle); renderBuilder(); }
+    toast("課程管理：改用上次快取（可能是網路或權限）");
+  }
+}
+async function buildModule(){
+  const title=norm($("#module-title").value);
+  if(!title){toast("先填模組名稱");$("#module-title").focus();return;}
+  const target=$("#module-target").value;
+  const picks=Array.from(st.picks);
+  if(!picks.length){toast("先勾選至少 1 個單場完稿");return;}
+  const picked=st.singles.filter(x=>picks.includes(norm(x.id)));
+  const outline=picked.map((x,i)=>`${String(i+1).padStart(2,'0')}｜${norm(x.title)}（${norm(x.id)}）`).join("\n");
+  const payload={
+    title,type:"course",status:target==="final"?"ready":"draft",
+    schedule_mode:"module",module_sessions:picked.length,
+    session_minutes:norm($("#module-session-min").value),
+    tags:norm($("#module-tags").value),
+    summary:`由 ${picked.length} 個單場完稿組合的模組課程（活動）。`,
+    outline,notes:`sources:\n${outline}`
   };
-
+  $("#builder-result").textContent="建立中…";
   try{
-    const res = await fetch(settings.courseApi, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const txt = await res.text();
-    UI.syncLog.textContent = `POST 回應：${txt}`;
-    toast('已送出同步（POST）');
-    return;
-  }catch(err){
-    // fallback: GET with query
-  }
-
-  try{
-    const u = new URL(settings.courseApi);
-    u.searchParams.set('action','append');
-    u.searchParams.set('sheet', sheet);
-    u.searchParams.set('tsv', row);
-    const res = await fetch(u.toString(), {method:'GET'});
-    const txt = await res.text();
-    UI.syncLog.textContent = `GET 回應：${txt}`;
-    toast('已送出同步（GET）');
-  }catch(err){
-    UI.syncLog.textContent = `同步失敗：${String(err)}`;
-    toast('同步失敗');
+    const url=courseUrl({mode:"upsert",state:target});
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(!r.ok) throw new Error("POST HTTP "+r.status);
+    const out=await r.json();
+    $("#builder-result").textContent=`✅ 建立成功\nstate=${out.state||target}\nid=${out.id||(out.item&&out.item.id)||""}`;
+    toast("模組課程已建立");
+    st.picks.clear(); setL("angel_picks",[]);
+    $("#course-state").value=target;
+    await loadCourses(target);
+    if(target!=="final") await loadCourses("final");
+    renderBuilder();
+  }catch(e){
+    $("#builder-result").textContent=`⚠️ 建立失敗（可能是 CORS 或權限）\n\n若 ping/list 都 OK 但 POST 不行，跟我說，我幫你改成 GET 版 upsert。\n\n錯誤：${e.message||e}`;
+    toast("建立失敗");
   }
 }
 
-async function loadListFromBackend(state){
-  const settings = loadSettings();
-  const sheet = SHEET_BY_STATE[state];
-  UI.syncLog.textContent = '抓取中...';
-
-  // Expect: ?action=list&sheet=...
+async function loadScriptDoc(state,id,goTab){
   try{
-    const u = new URL(settings.courseApi);
-    u.searchParams.set('action','list');
-    u.searchParams.set('sheet', sheet);
-    const res = await fetch(u.toString(), {method:'GET'});
-    const txt = await res.text();
-    let obj = null;
-    try{ obj = JSON.parse(txt); }catch(e){ obj = null; }
-    // Accept shapes: {ok:true, rows:[...]} or {items:[...]} or raw array
-    let list = [];
-    if (Array.isArray(obj)) list = obj;
-    else if (obj && Array.isArray(obj.rows)) list = obj.rows;
-    else if (obj && Array.isArray(obj.items)) list = obj.items;
-    else list = [];
+    const data=await jget(courseUrl({mode:"get",state,id}));
+    const item=data.item||{};
+    st.currentItem=item;
+    fillScriptForm_(state,item);
+    $("#script-out").textContent="✅ 已載入（可編輯後存回後臺）";
+    if(goTab) showTab("scripts");
+  }catch(e){
+    $("#script-out").textContent=`⚠️ 載入失敗：${e.message||e}`;
+    toast("文稿載入失敗");
+  }
+}
 
-    lastApiList = list;
-    UI.syncLog.textContent = `已抓到 ${list.length} 筆（${sheet}）`;
-    toast(`已抓到 ${list.length} 筆`);
-    if (state === 'final'){
-      finals = list;
-      renderFinals();
+function fillScriptForm_(state,item){
+  $("#script-state").value=state;
+  $("#script-id").value=norm(item.id);
+  $("#script-title").value=norm(item.title);
+  $("#script-version").value=norm(item.version);
+  $("#script-ppt").value=cleanTextForCopy(item.ppt_outline||"");
+  $("#script-page").value=cleanTextForCopy(item.page_script||"");
+  $("#script-voice").value=cleanTextForCopy(item.voiceover_script||"");
+  $("#script-host").value=cleanTextForCopy(item.host_script||"");
+  // materials/homework：優先用 materials，沒有就用 notes/outline 裡的作業區
+  $("#script-homework").value=cleanTextForCopy(item.materials||item.homework||"");
+}
+
+function collectScriptForm_(){
+  const state=$("#script-state").value;
+  const id=norm($("#script-id").value);
+  const item={
+    id,
+    title:norm($("#script-title").value),
+    version:norm($("#script-version").value),
+    ppt_outline: cleanTextForCopy($("#script-ppt").value),
+    page_script: cleanTextForCopy($("#script-page").value),
+    voiceover_script: cleanTextForCopy($("#script-voice").value),
+    host_script: cleanTextForCopy($("#script-host").value),
+    materials: cleanTextForCopy($("#script-homework").value),
+  };
+  return {state,item};
+}
+
+async function saveScriptDoc(){
+  const {state,item}=collectScriptForm_();
+  if(!item.id){toast("請先有課程 ID（可從清單點「文稿」自動帶入）");return;}
+  try{
+    const url=courseUrl({mode:"upsert",state});
+    const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(item)});
+    if(!r.ok) throw new Error("POST HTTP "+r.status);
+    const out=await r.json();
+    $("#script-out").textContent=`✅ 已存回後臺\nstate=${out.state||state}\nid=${out.id||(out.item&&out.item.id)||item.id}`;
+    toast("文稿已存回後臺");
+  }catch(e){
+    $("#script-out").textContent=`⚠️ 存回失敗（可能是權限/CORS）\n\n錯誤：${e.message||e}`;
+    toast("文稿存回失敗");
+  }
+}
+
+function saveScriptLocal(){
+  const {state,item}=collectScriptForm_();
+  if(!item.id){toast("請先填課程 ID");return;}
+  setL("script_draft_"+state+"_"+item.id,item);
+  $("#script-out").textContent="✅ 已存本機草稿（localStorage）";
+  toast("已存本機草稿");
+}
+
+async function loadScriptByForm(){
+  const state=$("#script-state").value;
+  const id=norm($("#script-id").value);
+  if(!id){toast("請填 ID");return;}
+  // 先試本機草稿
+  const local=getL("script_draft_"+state+"_"+id,null);
+  if(local){
+    fillScriptForm_(state,local);
+    $("#script-out").textContent="✅ 已載入本機草稿（若要對後臺同步，請按「載入」或「存回後臺」）";
+    if(confirm("要同時從後臺再載一次比對嗎？取消=先用本機草稿")){ await loadScriptDoc(state,id,false); }
+    return;
+  }
+  await loadScriptDoc(state,id,false);
+}
+
+async function copy(text){
+  try{await navigator.clipboard.writeText(text);toast("已複製");}
+  catch(e){toast("複製失敗");}
+}
+function bind(){
+  $$(".tabbtn").forEach(b=>b.addEventListener("click",()=>{
+    $$(".tabbtn").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+    $$(".tab").forEach(x=>x.classList.remove("on")); $("#"+b.dataset.tab).classList.add("on");
+  }));
+  $("#btn-refresh").addEventListener("click",initLoad);
+  $("#tools-q").addEventListener("input",renderTools);
+  $("#tools-cat").addEventListener("change",renderTools);
+  $("#course-state").addEventListener("change",()=>loadCourses($("#course-state").value));
+  $("#course-q").addEventListener("input",renderCourses);
+  $("#course-status").addEventListener("change",renderCourses);
+  $("#builder-q").addEventListener("input",renderBuilder);
+  $("#btn-clear-picks").addEventListener("click",()=>{st.picks.clear();setL("angel_picks",[]);renderBuilder();toast("已清空勾選")});
+  $("#btn-build-module").addEventListener("click",buildModule);
+  document.addEventListener("click",async e=>{
+    const c=e.target.closest(".copy");
+    if(c){
+      const sel=c.getAttribute("data-copy");
+      let t=c.getAttribute("data-copytext")||(sel?(()=>{const el=document.querySelector(sel); if(!el) return ""; return ("value" in el)?el.value:el.textContent;})():"");
+      t = cleanTextForCopy(t);
+      if(t) await copy(t);
     }
-  }catch(err){
-    UI.syncLog.textContent = `抓取失敗：${String(err)}`;
-    toast('抓取失敗');
-  }
-}
+    const v=e.target.closest("[data-act='view']");
+    if(v){
+      const id=v.dataset.id; const state=$("#course-state").value;
+      try{const data=await jget(courseUrl({mode:"get",state,id})); $("#api-out").textContent=JSON.stringify(data,null,2);
+        document.querySelector(".tabbtn[data-tab='api']").click();
+      }catch(err){toast("讀取失敗")}
+    }
 
-function renderFinals(){
-  const q = safeStr(UI.finalsSearch.value).toLowerCase().trim();
-  UI.finalsList.innerHTML = '';
-  const list = (finals || []).filter(x=>{
-    const hay = JSON.stringify(x||{}).toLowerCase();
-    return q ? hay.includes(q) : true;
-  });
-
-  if (!list.length){
-    UI.finalsList.innerHTML = `<div class="mini">目前沒有完稿資料。請先按「抓完稿清單」。</div>`;
-    return;
-  }
-
-  list.slice(0,200).forEach(item=>{
-    const title = safeStr(item.title || item[1] || '').trim();
-    const tags = safeStr(item.tags || '').trim();
-    const audience = safeStr(item.audience || '').trim();
-    const div=document.createElement('div');
-    div.className='tool-item';
-    div.innerHTML = `
-      <div class="title">${escapeHtml(title || '（未命名）')}</div>
-      <div class="meta">${escapeHtml(audience)} · ${escapeHtml(tags)}</div>
-      <div class="actions">
-        <button class="btn small" data-load>叫出到工作台</button>
-        <button class="btn small" data-copyai>複製AI指令</button>
-        <button class="btn small" data-copytsv>複製TSV</button>
-      </div>
-    `;
-    div.querySelector('[data-load]').addEventListener('click', ()=>{
-      // If backend returns full object in our shape, apply
-      // Otherwise, keep minimal
-      const mapped = mapBackendItemToForm_(item);
-      applyForm(mapped);
-      switchTab('workbench');
-      toast('已叫出');
-    });
-    div.querySelector('[data-copyai]').addEventListener('click', async ()=>{
-      const mapped = mapBackendItemToForm_(item);
-      applyForm(mapped);
-      await copyToClipboard(getAiPrompt());
-    });
-    div.querySelector('[data-copytsv]').addEventListener('click', async ()=>{
-      const mapped = mapBackendItemToForm_(item);
-      applyForm(mapped);
-      await copyToClipboard(getTsvRow());
-    });
-
-    UI.finalsList.appendChild(div);
-  });
-}
-
-function mapBackendItemToForm_(item){
-  // If item is already structured
-  if (item && typeof item === 'object' && !Array.isArray(item)){
-    return {
-      id: item.id,
-      title: item.title,
-      type: item.type,
-      status: item.status,
-      version: item.version,
-      owner: item.owner,
-      audience: item.audience,
-      duration_min: item.duration_min,
-      capacity: item.capacity,
-      tags: item.tags,
-      summary: item.summary,
-      objectives: item.objectives,
-      outline: item.outline,
-      materials: item.materials,
-      notes: item.notes,
-      main_tool: item.main_tool || null,
-      sub_tools: item.sub_tools || [],
-      outline_items: (item.outline_items || splitOutline_(item.outline)),
-      framework_text: item.framework_text || '',
-      closing_line: item.closing_line || '',
-      episodes: item.episodes || ''
-    };
-  }
-  // If it's an array row (tsv split by tabs already)
-  if (Array.isArray(item)){
-    // fallback mapping by known header order
-    return {
-      id: item[0],
-      title: item[1],
-      type: item[2],
-      status: item[3],
-      version: item[4],
-      owner: item[5],
-      audience: item[6],
-      duration_min: item[7],
-      capacity: item[8],
-      tags: item[9],
-      summary: item[10],
-      objectives: item[11],
-      outline: item[12],
-      materials: item[13],
-      links: item[14],
-      notes: item[16],
-      outline_items: splitOutline_(item[12] || ''),
-    };
-  }
-  return {};
-}
-
-function splitOutline_(text){
-  const s = safeStr(text);
-  if (!s.trim()) return [];
-  return s.split(/\n+/).map(x=>x.replace(/^\d+\.?\s*/,'').trim()).filter(Boolean);
-}
-
-function switchTab(name){
-  document.querySelectorAll('.tab').forEach(t=>{
-    t.classList.toggle('active', t.dataset.tab===name);
-  });
-  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-  $('tab-' + name).classList.add('active');
-}
-
-function bindTabs(){
-  document.querySelectorAll('.tab').forEach(btn=>{
-    btn.addEventListener('click', ()=> switchTab(btn.dataset.tab));
-  });
-}
-
-function bindSettings(){
-  UI.btnSettings.addEventListener('click', ()=>{
-    const s = loadSettings();
-    UI.toolsApi.value = s.toolsApi;
-    UI.courseApi.value = s.courseApi;
-    UI.modalBg.style.display='block';
-    UI.settingsModal.style.display='block';
-    UI.settingsLog.textContent='';
-  });
-  UI.settingsClose.addEventListener('click', ()=>{
-    UI.modalBg.style.display='none';
-    UI.settingsModal.style.display='none';
-  });
-  UI.settingsSave.addEventListener('click', ()=>{
-    const s = loadSettings();
-    s.toolsApi = safeStr(UI.toolsApi.value).trim();
-    s.courseApi = safeStr(UI.courseApi.value).trim();
-    saveSettings(s);
-    UI.settingsLog.textContent = '已儲存。';
-    toast('設定已儲存');
-  });
-  UI.settingsPing.addEventListener('click', async ()=>{
-    const toolsPing = await apiPing(UI.toolsApi.value.trim());
-    const coursePing = await apiPing(UI.courseApi.value.trim());
-    UI.settingsLog.textContent = `Tools ping: ${toolsPing.ok ? 'OK' : 'FAIL'}\n${toolsPing.text}\n\nCourse ping: ${coursePing.ok ? 'OK' : 'FAIL'}\n${coursePing.text}`;
-  });
-}
-
-function bindWorkbench(){
-  UI.kindSelect.addEventListener('change', onKindChange);
-  UI.episodes.addEventListener('input', onEpisodesChange);
-  UI.stateSelect.addEventListener('change', onStateChange);
-
-  // update dots on input
-  ['title','audience','tags','closingLine','frameworkText','durationMin','capacity','owner','kindOther'].forEach(id=>{
-    $(id).addEventListener('input', updateWizardDots);
-  });
-
-  UI.btnPickMain.addEventListener('click', ()=>{
-    if (!tools.length) fetchTools();
-    openToolModal('main');
-  });
-  UI.btnPickSubs.addEventListener('click', ()=>{
-    if (!tools.length) fetchTools();
-    openToolModal('subs');
-  });
-
-  UI.modalClose.addEventListener('click', closeToolModal);
-  UI.modalBg.addEventListener('click', ()=>{
-    // close only tool/settings modals if open
-    if (UI.toolModal.style.display==='block') closeToolModal();
-    if (UI.settingsModal.style.display==='block'){
-      UI.modalBg.style.display='none';
-      UI.settingsModal.style.display='none';
+    const s=e.target.closest("[data-act='script']");
+    if(s){
+      const id=s.dataset.id; const state=$("#course-state").value;
+      await loadScriptDoc(state,id,true);
     }
   });
-  UI.modalSearch.addEventListener('input', renderModalTools);
-  UI.modalPrefix.addEventListener('change', renderModalTools);
-  UI.modalCategory.addEventListener('input', renderModalTools);
-  UI.modalConfirm.addEventListener('click', ()=>{
-    renderSelectedTools();
-    closeToolModal();
-    toast('已確認');
-  });
+  $("#btn-ping").addEventListener("click",async()=>{try{$("#api-out").textContent=JSON.stringify(await jget(courseUrl({mode:"ping"})),null,2);toast("ping OK")}catch(e){toast("ping 失敗")}});
+  $("#btn-sample-list").addEventListener("click",async()=>{try{$("#api-out").textContent=JSON.stringify(await jget(courseUrl({mode:"list",state:"final",limit:20})),null,2);toast("list OK")}catch(e){toast("list 失敗")}});
+  // 文稿存取
+  $("#btn-script-load").addEventListener("click",loadScriptByForm);
+  $("#btn-script-save").addEventListener("click",saveScriptDoc);
+  $("#btn-script-local").addEventListener("click",saveScriptLocal);
 
-  UI.btnCopyAI.addEventListener('click', ()=> copyToClipboard(getAiPrompt()));
-  UI.btnCopyTSV.addEventListener('click', ()=> copyToClipboard(getTsvRow()));
-  UI.btnSaveLocal.addEventListener('click', saveLocal);
-  UI.btnLoadLocal.addEventListener('click', loadLocal);
-  UI.btnClearLocal.addEventListener('click', clearLocal);
-  UI.btnExportJson.addEventListener('click', exportJson);
 
-  UI.fCopyAI.addEventListener('click', ()=> copyToClipboard(getAiPrompt()));
-  UI.fCopyTSV.addEventListener('click', ()=> copyToClipboard(getTsvRow()));
-  UI.fSaveLocal.addEventListener('click', saveLocal);
-  UI.fExportJson.addEventListener('click', exportJson);
-
-  UI.btnSync.addEventListener('click', syncToBackend);
-  UI.btnLoadFromApi.addEventListener('click', ()=> loadListFromBackend(UI.stateSelect.value));
+  // 文稿存取
+  $("#btn-script-load").addEventListener("click",loadScriptByForm);
+  $("#btn-script-save").addEventListener("click",saveScriptDoc);
+  $("#btn-script-local").addEventListener("click",saveScriptLocal);
 }
 
-function bindTools(){
-  UI.btnToolsSync.addEventListener('click', ()=> fetchTools(true));
-  UI.btnToolsClearCache.addEventListener('click', ()=>{
-    localStorage.removeItem(LS_KEYS.toolsCache);
-    tools = [];
-    renderTools();
-    toast('已清空工具快取');
-  });
-  UI.toolsSearch.addEventListener('input', renderTools);
-  UI.toolsPrefix.addEventListener('change', renderTools);
-  UI.toolsCategory.addEventListener('input', renderTools);
+let deferredPrompt=null;
+function pwa(){
+  if("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  window.addEventListener("beforeinstallprompt",(e)=>{e.preventDefault();deferredPrompt=e;const b=$("#btn-install");b.hidden=false;b.onclick=async()=>{b.hidden=true;deferredPrompt.prompt();await deferredPrompt.userChoice;deferredPrompt=null;}});
 }
-
-function bindFinals(){
-  UI.btnFinalsLoad.addEventListener('click', ()=> loadListFromBackend('final'));
-  UI.finalsSearch.addEventListener('input', renderFinals);
+async function initLoad(){
+  $("#tools-api").textContent=TOOLS_API_URL;
+  $("#course-api").textContent=COURSE_API_BASE;
+  await loadTools();
+  await loadCourses($("#course-state").value);
 }
-
-function init(){
-  // Cache UI refs
-  Object.assign(UI, {
-    toast: $('toast'),
-    // tabs
-    // workbench
-    statusPills: $('statusPills'),
-    stateSelect: $('stateSelect'),
-    kindSelect: $('kindSelect'),
-    kindOtherWrap: $('kindOtherWrap'),
-    kindOther: $('kindOther'),
-    scheduleRow: $('scheduleRow'),
-    episodesLabel: $('episodesLabel'),
-    durationLabel: $('durationLabel'),
-    episodes: $('episodes'),
-    durationMin: $('durationMin'),
-    capacity: $('capacity'),
-    title: $('title'),
-    audience: $('audience'),
-    tags: $('tags'),
-    owner: $('owner'),
-    closingLine: $('closingLine'),
-    mainTool: $('mainTool'),
-    subTools: $('subTools'),
-    btnPickMain: $('btnPickMain'),
-    btnPickSubs: $('btnPickSubs'),
-    frameworkText: $('frameworkText'),
-    outlineList: $('outlineList'),
-    draftExtra: $('draftExtra'),
-    summary: $('summary'),
-    objectives: $('objectives'),
-    materials: $('materials'),
-    notes: $('notes'),
-    dot1:$('dot1'), dot2:$('dot2'), dot3:$('dot3'), dot4:$('dot4'),
-    stateHint: $('stateHint'),
-    syncLog: $('syncLog'),
-    btnSync: $('btnSync'),
-    btnLoadFromApi: $('btnLoadFromApi'),
-    btnCopyAI: $('btnCopyAI'),
-    btnCopyTSV: $('btnCopyTSV'),
-    btnSaveLocal: $('btnSaveLocal'),
-    btnLoadLocal: $('btnLoadLocal'),
-    btnClearLocal: $('btnClearLocal'),
-    btnExportJson: $('btnExportJson'),
-    autoCleanNewlines: $('autoCleanNewlines'),
-    fCopyAI: $('fCopyAI'),
-    fCopyTSV: $('fCopyTSV'),
-    fSaveLocal: $('fSaveLocal'),
-    fExportJson: $('fExportJson'),
-
-    // tools tab
-    btnToolsSync: $('btnToolsSync'),
-    btnToolsClearCache: $('btnToolsClearCache'),
-    toolsSearch: $('toolsSearch'),
-    toolsPrefix: $('toolsPrefix'),
-    toolsCategory: $('toolsCategory'),
-    toolsList: $('toolsList'),
-
-    // finals tab
-    btnFinalsLoad: $('btnFinalsLoad'),
-    finalsSearch: $('finalsSearch'),
-    finalsList: $('finalsList'),
-
-    // modals
-    modalBg: $('modalBg'),
-    toolModal: $('toolModal'),
-    modalTitle: $('modalTitle'),
-    modalClose: $('modalClose'),
-    modalSearch: $('modalSearch'),
-    modalPrefix: $('modalPrefix'),
-    modalCategory: $('modalCategory'),
-    modalTools: $('modalTools'),
-    modalConfirm: $('modalConfirm'),
-
-    // settings modal
-    btnSettings: $('btnSettings'),
-    settingsModal: $('settingsModal'),
-    settingsClose: $('settingsClose'),
-    toolsApi: $('toolsApi'),
-    courseApi: $('courseApi'),
-    settingsSave: $('settingsSave'),
-    settingsPing: $('settingsPing'),
-    settingsLog: $('settingsLog'),
-  });
-
-  bindTabs();
-  bindSettings();
-  bindWorkbench();
-  bindTools();
-  bindFinals();
-
-  // Initial
-  onKindChange();
-  onStateChange();
-  renderSelectedTools();
-  updateWizardDots();
-
-  // Load tools cache instantly, then fetch in background
-  fetchTools(false);
-
-  // Load local draft if exists (soft)
-  const raw = localStorage.getItem(LS_KEYS.draft);
-  if (raw){
-    try{ applyForm(JSON.parse(raw)); }catch(e){}
-  }
-
-  // Register SW
-  if ('serviceWorker' in navigator){
-    navigator.serviceWorker.register('./sw.js').catch(()=>{});
-  }
-}
-
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener("DOMContentLoaded",()=>{
+  st.tools=getL("cache_tools",[]); st.cats=getL("cache_cats",[]); renderCats(); renderTools();
+  st.picks=new Set(getL("angel_picks",[]));
+  st.singles=getL("cache_singles",[]).filter(isSingle); renderBuilder();
+  bind(); pwa(); initLoad();
+});
+})();

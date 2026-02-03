@@ -1,379 +1,159 @@
-<!doctype html>
-<html lang="zh-Hant">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-  <title>Angel｜課程設計工作台</title>
-  <meta name="theme-color" content="#0f3c2d"/>
-  <meta name="description" content="發想→草稿→完稿｜工具庫可同步｜一鍵複製 AI 指令｜TSV 一列輸出｜本機草稿＋JSON備份"/>
-  <link rel="manifest" href="./manifest.json"/>
-  <link rel="icon" href="./assets/icons/icon-192.png"/>
-  <link rel="apple-touch-icon" href="./assets/icons/icon-192.png"/>
-  <link rel="stylesheet" href="./styles.css"/>
-</head>
-<body>
-  <div class="topbar">
-    <div class="brand">
-      <div class="logo">A</div>
-      <div>
-        <h1>Angel｜課程設計工作台</h1>
-        <div class="sub">發想 → 草稿 → 完稿｜工具庫存管理同步｜一鍵複製 AI 指令｜TSV 一列輸出</div>
-      </div>
-    </div>
-    <div class="actions">
-      <button class="btn small" id="btnSettings">設定</button>
+<!doctype html><html lang="zh-Hant"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<title>幸福教養課程管理</title>
+<meta name="theme-color" content="#1f3a2e"/>
+<link rel="manifest" href="./manifest.json"/>
+<link rel="icon" href="./icons/icon-192.png"/>
+<link rel="apple-touch-icon" href="./icons/icon-192.png"/>
+<link rel="stylesheet" href="./styles.css"/>
+</head><body>
+<header class="topbar">
+  <div class="brand">
+    <span class="dot"></span>
+    <div>
+      <div class="title">幸福教養課程管理</div>
+      <div class="sub">工具庫存 × 課程管理 × 模組組合</div>
     </div>
   </div>
+  <button id="btn-install" class="btn ghost" hidden>一鍵安裝</button>
+</header>
 
-  <div class="container">
-    <div class="tabs">
-      <button class="tab active" data-tab="workbench">課程設計工作台</button>
-      <button class="tab" data-tab="tools">工具庫存管理</button>
-      <button class="tab" data-tab="finals">完稿課程清單</button>
+<main class="wrap">
+  <section class="card">
+    <div class="row between">
+      <div class="tabs">
+        <button class="tabbtn on" data-tab="tools">工具庫存</button>
+        <button class="tabbtn" data-tab="courses">課程管理</button>
+        <button class="tabbtn" data-tab="scripts">文稿存取</button>
+        <button class="tabbtn" data-tab="builder">模組組合</button>
+        <button class="tabbtn" data-tab="api">API 測試</button>
+      </div>
+      <button id="btn-refresh" class="btn">重新抓取</button>
     </div>
 
-    <!-- Workbench -->
-    <section class="section active" id="tab-workbench">
-      <div class="grid cols2">
-        <div class="card solid">
-          <h2>狀態進度</h2>
-          <div class="mini">你可以先把骨架站穩，再慢慢補完整。任何時候停下來都可以。</div>
-          <div style="height:10px"></div>
-          <div class="pills" id="statusPills"></div>
-          <div style="height:12px"></div>
+    <div class="hr"></div>
 
-          <div class="row">
-            <div class="field" style="flex:1; min-width:200px;">
-              <label>目前狀態</label>
-              <select id="stateSelect">
-                <option value="idea">發想</option>
-                <option value="draft">草稿</option>
-                <option value="final">完稿</option>
-              </select>
-            </div>
-            <div class="field" style="flex:1; min-width:200px;">
-              <label>課程形式</label>
-              <select id="kindSelect">
-                <option value="lecture">演講</option>
-                <option value="module">模組課程</option>
-                <option value="single_class">單場課程</option>
-                <option value="single_event">單場活動</option>
-                <option value="other">其他（手動輸入）</option>
-              </select>
-            </div>
-            <div class="field" id="kindOtherWrap" style="flex:1; min-width:200px; display:none;">
-              <label>其他形式名稱</label>
-              <input id="kindOther" placeholder="例如：工作坊 / 企業內訓 / 親子體驗..."/>
-            </div>
-          </div>
-
-          <div class="row" id="scheduleRow">
-            <div class="field" style="flex:1; min-width:200px;">
-              <label id="episodesLabel">模組堂數（episodes）</label>
-              <input id="episodes" type="number" min="1" value="8"/>
-            </div>
-            <div class="field" style="flex:1; min-width:200px;">
-              <label id="durationLabel">每堂時間（分鐘）</label>
-              <input id="durationMin" type="number" min="10" value="120"/>
-            </div>
-            <div class="field" style="flex:1; min-width:200px;">
-              <label>人數（capacity）</label>
-              <input id="capacity" type="number" min="1" value="20"/>
-            </div>
-          </div>
-
-          <hr class="sep"/>
-
-          <div class="row">
-            <div class="field" style="flex:1; min-width:240px;">
-              <label>課名（title）</label>
-              <input id="title" placeholder="例如：給親子的｜幸福教養體驗活動"/>
-            </div>
-            <div class="field" style="flex:1; min-width:180px;">
-              <label>對象（audience）</label>
-              <input id="audience" placeholder="例如：親子 / 家長 / 老師 / 成人關係..."/>
-            </div>
-          </div>
-
-          <div class="row">
-            <div class="field" style="flex:1; min-width:240px;">
-              <label>標籤 tags（用空格或 # 分隔）</label>
-              <input id="tags" placeholder="#教養焦慮 #情緒急救 #關係修復"/>
-            </div>
-            <div class="field" style="flex:1; min-width:240px;">
-              <label>擁有者 owner（可留空）</label>
-              <input id="owner" placeholder="例如：天使笑長"/>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>I-2｜結果感 closing_line（結尾一句話）</label>
-            <textarea id="closingLine" placeholder="例如：孩子不需要你完美，他需要你回得來。"></textarea>
-          </div>
-
-          <hr class="sep"/>
-
-          <div class="row">
-            <div class="field" style="flex:1; min-width:260px;">
-              <label>主工具（單選）</label>
-              <div class="row">
-                <input id="mainTool" placeholder="尚未選擇" readonly/>
-                <button class="btn small" id="btnPickMain">選主工具</button>
-              </div>
-            </div>
-            <div class="field" style="flex:1; min-width:260px;">
-              <label>副工具（多選）</label>
-              <div class="row">
-                <input id="subTools" placeholder="尚未選擇" readonly/>
-                <button class="btn small" id="btnPickSubs">選副工具</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>核心流程架構（framework_text）</label>
-            <textarea id="frameworkText" placeholder="用你最順口的一段話，先把流程站穩。"></textarea>
-          </div>
-
-          <div class="field" id="outlineWrap">
-            <label id="outlineLabel">I-4｜大綱（依堂數自動產生欄位）</label>
-            <div id="outlineList"></div>
-          </div>
-
-          <div class="field" id="draftExtra" style="display:none;">
-            <hr class="sep"/>
-            <h2 style="margin-top:0;">草稿/完稿補充（可試教 / 可上架）</h2>
-            <div class="mini">草稿與完稿都能一鍵產生「完整課堂企劃＋教材與作業內容」的 AI 協作指令。</div>
-
-            <div class="field">
-              <label>objectives（條列）</label>
-              <textarea id="objectives" placeholder="例如：
-- 大人先穩定：把心站穩
-- 孩子情緒降溫：回到感官
-- 關係修復：把話說得出口"></textarea>
-            </div>
-            <div class="field">
-              <label>summary（對外版簡介）</label>
-              <textarea id="summary" placeholder="對外可讀的一段話（草稿可先短版，完稿再定稿）。"></textarea>
-            </div>
-            <div class="field">
-              <label>materials（教材/材料清單）</label>
-              <textarea id="materials" placeholder="例如：PPT、練習單、提醒卡、結業小抄..."></textarea>
-            </div>
-            <div class="field">
-              <label>notes（備註）</label>
-              <textarea id="notes" placeholder="例如：試教觀察、修正方向、版本紀錄..."></textarea>
-            </div>
-          </div>
-        </div>
-
-        <div class="card">
-          <h2>快速操作</h2>
-          <div class="mini">先把需要的按鈕放在手邊：複製、備份、同步。</div>
-
-          <div style="height:10px"></div>
-          <div class="progress">
-            <span class="badge">Wizard</span>
-            <div class="stepdot active" id="dot1">1</div>
-            <div class="stepdot" id="dot2">2</div>
-            <div class="stepdot" id="dot3">3</div>
-            <div class="stepdot" id="dot4">4</div>
-          </div>
-
-          <hr class="sep"/>
-
-          <div class="field">
-            <label>狀態資料</label>
-            <div class="mini" id="stateHint"></div>
-          </div>
-
-          <div class="field">
-            <label>後臺同步（可選）</label>
-            <div class="mini">若你已完成課程管理 API（含 發想/草稿/幸福教養課程管理 三分頁），可直接按同步。</div>
-            <div class="row">
-              <button class="btn primary" id="btnSync">同步到後臺（本狀態）</button>
-              <button class="btn" id="btnLoadFromApi">從後臺抓（本狀態清單）</button>
-            </div>
-            <div class="mini monos" id="syncLog" style="margin-top:8px;"></div>
-          </div>
-
-          <hr class="sep"/>
-
-          <div class="field">
-            <label>本機草稿（localStorage）</label>
-            <div class="row">
-              <button class="btn" id="btnSaveLocal">存本機草稿</button>
-              <button class="btn" id="btnLoadLocal">叫出本機草稿</button>
-              <button class="btn" id="btnClearLocal">清空本機草稿</button>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>備份</label>
-            <div class="row">
-              <button class="btn" id="btnExportJson">匯出 JSON（備份）</button>
-              <label class="mini" style="display:flex; gap:8px; align-items:center; margin:0;">
-                <input type="checkbox" id="autoCleanNewlines" checked/>
-                自動清理換行（複製用）
-              </label>
-            </div>
-          </div>
-
-          <hr class="sep"/>
-
-          <div class="field">
-            <label>複製輸出</label>
-            <div class="row">
-              <button class="btn primary" id="btnCopyAI">一鍵複製｜AI 指令</button>
-              <button class="btn" id="btnCopyTSV">一鍵複製｜TSV 一列（本狀態）</button>
-            </div>
-          </div>
-
-          <div class="field">
-            <label>提示</label>
-            <div class="mini">你現在做得很好。先把「可以開始」放在第一位，完整可以慢慢長出來。</div>
-          </div>
-        </div>
+    <section id="tools" class="tab on">
+      <div class="row gap">
+        <input id="tools-q" class="input" placeholder="搜尋工具（名稱/ID/分類/標籤）"/>
+        <select id="tools-cat" class="select"><option value="">全部分類</option></select>
       </div>
+      <div class="hint">資料來源：工具庫存管理 API（取代 data/tools.csv）</div>
+      <div id="tools-list" class="list"></div>
     </section>
 
-    <!-- Tools -->
-    <section class="section" id="tab-tools">
-      <div class="card solid">
-        <h2>工具庫存管理（同步＋快取）</h2>
-        <div class="mini">這裡顯示「工具庫存管理 API」回來的工具。若網路不穩，也會用本機快取讓你能勾選。</div>
-        <div class="row" style="margin-top:10px;">
-          <button class="btn primary" id="btnToolsSync">同步工具庫</button>
-          <button class="btn" id="btnToolsClearCache">清空工具快取</button>
-        </div>
-        <div class="field">
-          <label>搜尋</label>
-          <input id="toolsSearch" placeholder="輸入：MIX / EQ / COM / ACT / REL / KIDS / 工具名稱 / 痛點關鍵字"/>
-        </div>
-        <div class="row">
-          <div class="field" style="flex:1; min-width:200px;">
-            <label>Prefix 篩選</label>
-            <select id="toolsPrefix">
-              <option value="">全部</option>
-              <option value="MIX">MIX</option>
-              <option value="EQ">EQ</option>
-              <option value="COM">COM</option>
-              <option value="ACT">ACT</option>
-              <option value="REL">REL</option>
-              <option value="KIDS">KIDS</option>
-            </select>
-          </div>
-          <div class="field" style="flex:1; min-width:260px;">
-            <label>Category 篩選</label>
-            <input id="toolsCategory" placeholder="例如：綜合/基礎定頻工具"/>
-          </div>
-        </div>
-        <div id="toolsList" class="tool-list"></div>
+    <section id="courses" class="tab">
+      <div class="row gap">
+        <select id="course-state" class="select">
+          <option value="final">完稿</option><option value="draft">草稿</option><option value="idea">發想</option>
+        </select>
+        <input id="course-q" class="input" placeholder="搜尋課程（標題/ID/標籤/摘要）"/>
+        <select id="course-status" class="select">
+          <option value="">全部狀態</option><option value="ready">ready</option><option value="draft">draft</option>
+          <option value="idea">idea</option><option value="archived">archived</option>
+        </select>
       </div>
+      <div class="hint">檢視三分頁資料（發想/草稿/完稿）。</div>
+      <div id="courses-list" class="list"></div>
     </section>
 
-    <!-- Finals -->
-    <section class="section" id="tab-finals">
-      <div class="card solid">
-        <h2>完稿課程清單（從後臺抓）</h2>
-        <div class="mini">完稿只收可上架成品。你可以從這裡叫出，再一鍵複製 AI 指令或 TSV。</div>
-        <div class="row" style="margin-top:10px;">
-          <button class="btn primary" id="btnFinalsLoad">抓完稿清單</button>
-        </div>
-        <div class="field">
-          <label>搜尋</label>
-          <input id="finalsSearch" placeholder="輸入課名/標籤/對象"/>
-        </div>
-        <div id="finalsList" class="tool-list"></div>
+    
+    <section id="scripts" class="tab">
+      <div class="hint"><b>把課程的「PPT/講稿/口播/主持稿」集中在這裡編輯與存回後臺</b><br/>操作：在「課程管理」點「文稿」→ 會自動載入到這一頁。</div>
+
+      <div class="row gap">
+        <select id="script-state" class="select">
+          <option value="final">完稿</option><option value="draft">草稿</option><option value="idea">發想</option>
+        </select>
+        <input id="script-id" class="input" placeholder="課程 ID（可由清單一鍵帶入）"/>
+        <button id="btn-script-load" class="btn">載入</button>
+        <button id="btn-script-save" class="btn primary">存回後臺</button>
+        <button id="btn-script-local" class="btn ghost">存本機草稿</button>
       </div>
+
+      <div class="row gap">
+        <input id="script-title" class="input" placeholder="課程名稱（title）"/>
+        <input id="script-version" class="input" placeholder="版本（version，可空）"/>
+      </div>
+
+      <div class="row gap">
+        <textarea id="script-ppt" class="textarea" rows="6" placeholder="PPT 大綱（ppt_outline）"></textarea>
+      </div>
+
+      <div class="row gap">
+        <textarea id="script-page" class="textarea" rows="8" placeholder="逐頁講稿（page_script）"></textarea>
+      </div>
+
+      <div class="row gap">
+        <textarea id="script-voice" class="textarea" rows="8" placeholder="影音口播稿（voiceover_script）"></textarea>
+      </div>
+
+      <div class="row gap">
+        <textarea id="script-host" class="textarea" rows="8" placeholder="演說/主持稿（host_script）"></textarea>
+      </div>
+
+      <div class="row gap">
+        <textarea id="script-homework" class="textarea" rows="6" placeholder="教材/作業/練習（materials / homework）"></textarea>
+      </div>
+
+      <div class="row gap">
+        <button class="btn ghost copy" data-copy="#script-ppt">一鍵複製：PPT</button>
+        <button class="btn ghost copy" data-copy="#script-page">一鍵複製：逐頁講稿</button>
+        <button class="btn ghost copy" data-copy="#script-voice">一鍵複製：口播稿</button>
+        <button class="btn ghost copy" data-copy="#script-host">一鍵複製：主持稿</button>
+        <button class="btn ghost copy" data-copy="#script-homework">一鍵複製：教材/作業</button>
+      </div>
+
+      <div class="hint">貼給 AI 或貼回表單前，系統會自動做「換行清理」：去除多餘空行、統一換行符號。</div>
+      <pre id="script-out" class="pre"></pre>
     </section>
-  </div>
 
-  <!-- Footer buttons (always visible) -->
-  <div class="footerbar">
-    <div class="footerinner">
-      <button class="btn primary" id="fCopyAI">一鍵複製｜AI 指令</button>
-      <button class="btn" id="fCopyTSV">一鍵複製｜TSV 一列</button>
-      <button class="btn" id="fSaveLocal">存本機草稿</button>
-      <button class="btn" id="fExportJson">匯出 JSON</button>
-    </div>
-  </div>
-
-  <!-- Tool Picker Modal -->
-  <div class="modal-backdrop" id="modalBg"></div>
-  <div class="modal" id="toolModal">
-    <header>
-      <h3 id="modalTitle">選工具</h3>
-      <div class="actions">
-        <button class="btn small" id="modalClose">關閉</button>
+<section id="builder" class="tab">
+      <div class="hint"><b>把「單場完稿」勾選起來 → 一鍵建立「模組課程（活動）」</b><br/>預設存到「草稿」。</div>
+      <div class="row gap">
+        <input id="builder-q" class="input" placeholder="搜尋單場完稿（標題/標籤/摘要）"/>
+        <button id="btn-clear-picks" class="btn ghost">清空勾選</button>
       </div>
-    </header>
-    <div class="tool-list">
-      <div class="field">
-        <label>搜尋工具</label>
-        <input id="modalSearch" placeholder="輸入工具ID/名稱/痛點/分類"/>
-      </div>
-      <div class="row">
-        <div class="field" style="flex:1; min-width:200px;">
-          <label>Prefix</label>
-          <select id="modalPrefix">
-            <option value="">全部</option>
-            <option value="MIX">MIX</option>
-            <option value="EQ">EQ</option>
-            <option value="COM">COM</option>
-            <option value="ACT">ACT</option>
-            <option value="REL">REL</option>
-            <option value="KIDS">KIDS</option>
-          </select>
-        </div>
-        <div class="field" style="flex:1; min-width:260px;">
-          <label>Category</label>
-          <input id="modalCategory" placeholder="可留空"/>
-        </div>
-      </div>
-      <div id="modalTools"></div>
-      <div style="height:8px"></div>
-      <div class="row" id="modalFooterActions">
-        <button class="btn primary" id="modalConfirm">確認選擇</button>
-      </div>
-      <div class="mini">若工具沒出現，請先到「工具庫存管理」按「同步工具庫」。</div>
-    </div>
-  </div>
+      <div id="builder-list" class="list"></div>
 
-  <!-- Settings Modal -->
-  <div class="modal" id="settingsModal">
-    <header>
-      <h3>設定</h3>
-      <div class="actions">
-        <button class="btn small" id="settingsClose">關閉</button>
+      <div class="hr"></div>
+
+      <div class="row gap">
+        <input id="module-title" class="input" placeholder="模組課程（活動）名稱（必填）"/>
+        <select id="module-target" class="select"><option value="draft">存到：草稿</option><option value="final">存到：完稿</option></select>
       </div>
-    </header>
-    <div class="tool-list">
-      <div class="mini">把 API 放好，就能同步工具庫與課程三狀態（發想/草稿/幸福教養課程管理）。</div>
-
-      <div class="field">
-        <label>工具庫存管理 API（Tools）</label>
-        <input id="toolsApi" placeholder="貼上你的 Tools API Web app URL"/>
+      <div class="row gap">
+        <input id="module-session-min" class="input" placeholder="每堂時間（例：90）可空" inputmode="numeric"/>
+        <input id="module-tags" class="input" placeholder="tags（逗號分隔，可空）"/>
       </div>
+      <button id="btn-build-module" class="btn primary">建立模組課程（活動）</button>
+      <pre id="builder-result" class="pre"></pre>
+    </section>
 
-      <div class="field">
-        <label>幸福教養課程管理 API（Course Manager）</label>
-        <input id="courseApi" placeholder="貼上你的 Course API Web app URL"/>
+    <section id="api" class="tab">
+      <div class="hint">工具庫存（成功網址）</div>
+      <code id="tools-api" class="code"></code>
+      <button class="btn ghost copy" data-copy="#tools-api">複製驗證碼</button>
+
+      <div class="hint" style="margin-top:10px">課程管理（基底）</div>
+      <code id="course-api" class="code"></code>
+      <button class="btn ghost copy" data-copy="#course-api">複製驗證碼</button>
+
+      <div class="hr"></div>
+      <div class="row gap">
+        <button id="btn-ping" class="btn">ping</button>
+        <button id="btn-sample-list" class="btn">list final（前 20）</button>
       </div>
+      <pre id="api-out" class="pre"></pre>
+    </section>
 
-      <div class="row">
-        <button class="btn primary" id="settingsSave">儲存設定</button>
-        <button class="btn" id="settingsPing">測試 ping</button>
-      </div>
+  </section>
 
-      <hr class="sep"/>
-      <div class="mini monos" id="settingsLog"></div>
-      <div class="mini">提醒：GAS Web app 建議「執行身分：我」＋「誰可存取：任何人」。</div>
-    </div>
-  </div>
+  <footer class="footer">
+    Angel PWA｜把心站穩，活得自在。任何時候停下來，都可以。只要舒服，就很好。
+  </footer>
+</main>
 
-  <div class="toast" id="toast"></div>
-
-  <script src="./app.js"></script>
-</body>
-</html>
+<div id="toast" class="toast"></div>
+<script src="./app.js"></script>
+</body></html>
