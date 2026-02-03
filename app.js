@@ -1,761 +1,887 @@
-/*
-  Angel｜課程管理工房 (PWA)
-  - 三狀態：idea / draft / final -> 對應 GAS Course Manager API
-  - 工具庫存：讀取 Tools Inventory API (工具庫存管理)
-  - 完稿：可勾選多個「單場完稿」-> 一鍵組合成「模組課程/活動」，存回 final
-
-  設計原則：
-  - 一眼就會用、三秒開始
-  - 不說教、不評價
+/* Angel Course Workbench - app.js
+   - Data source: Course API (GAS) for idea/draft/final
+   - Tools source: Tools API (GAS) for tool library (read-only)
+   - Save uses text/plain to avoid CORS preflight (common issue on GAS)
 */
 
-/* ===================== CONFIG ===================== */
-const CONFIG = {
-  // ✅ 你的「幸福教養課程管理 API」
-  courseApi: "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec",
-  // ✅ 工具庫存（你說：這張手動維護，給前臺勾選用）
-  toolsApi: "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec?sheet=工具庫存管理&format=tools",
-  listLimit: 200,
-};
+const DEFAULT_COURSE_API = "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec";
+const DEFAULT_TOOLS_API  = "https://script.google.com/macros/s/AKfycbwUl82fzFmReE8PyOB9G6FJDT-B1MOCZufcLDJ6mvUXIfuFN2YsHpPLS5ZNi93LeHR0SA/exec?sheet=%E5%B7%A5%E5%85%B7%E5%BA%AB%E5%AD%98%E7%AE%A1%E7%90%86&format=tools";
 
-const STATE_LABEL = { idea: "發想", draft: "草稿", final: "完稿" };
+const STATE_LABEL = { idea:"發想", draft:"草稿", final:"完稿" };
+const STATE_SHEET = { idea:"發想", draft:"草稿", final:"幸福教養課程管理" };
 
-/* ===================== DOM ===================== */
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const BASE_HEADERS = [
+  "id","title","type","status","version","owner","audience","duration_min","capacity","tags",
+  "summary","objectives","outline","materials","links","assets","notes","created_at","updated_at"
+];
 
-const els = {
-  // tabs
-  tabBtns: $$('[data-tab]'),
-  panels: $$('.panel'),
-  // toast
-  toast: $('#toast'),
+// New fields (we'll store as extra columns automatically by API)
+const EXTRA_FIELDS = [
+  "kind","kind_other","total_duration","location","venue_type","core_concept",
+  "main_tool","sub_tools","tool_uids","module_items"
+];
 
-  // lists
-  list: {
-    idea: $('#list-idea'),
-    draft: $('#list-draft'),
-    final: $('#list-final'),
-  },
-  search: {
-    idea: $('#search-idea'),
-    draft: $('#search-draft'),
-    final: $('#search-final'),
-  },
-  refresh: {
-    idea: $('#refresh-idea'),
-    draft: $('#refresh-draft'),
-    final: $('#refresh-final'),
-  },
-  newBtn: {
-    idea: $('#new-idea'),
-    draft: $('#new-draft'),
-    final: $('#new-final'),
-  },
+const $ = (s)=>document.querySelector(s);
+const $$ = (s)=>Array.from(document.querySelectorAll(s));
+const toastLine = $("#toastLine");
+const sheetHint = $("#sheetHint");
 
-  // editor fields
-  editor: {
-    state: $('#editor-state'),
-    id: $('#f-id'),
-    title: $('#f-title'),
-    type: $('#f-type'),
-    kind: $('#f-kind'),
-    kindOther: $('#f-kind-other'),
-    audience: $('#f-audience'),
-    duration: $('#f-duration'),
-    tags: $('#f-tags'),
-    status: $('#f-status'),
-    summary: $('#f-summary'),
-    outline: $('#f-outline'),
-    links: $('#f-links'),
-    script: $('#f-script'),
-    toolsUsed: $('#f-tools-used'),
-  },
-  editorActions: {
-    save: $('#save'),
-    clear: $('#clear'),
-    delete: $('#delete'),
-  },
+let state = "idea";
+let current = {}; // currently edited item
+let listCache = { idea:[], draft:[], final:[] };
 
-  // local draft
-  local: {
-    save: $('#local-save'),
-    load: $('#local-load'),
-    clear: $('#local-clear'),
-  },
+let toolsAll = [];
+let pickedMainTool = null;      // tool obj
+let pickedSubTools = [];        // tool obj[]
+let moduleCandidates = [];      // final items
+let moduleSelectedIds = new Set();
 
-  // tools
-  tools: {
-    refresh: $('#tools-refresh'),
-    list: $('#tools-list'),
-    filter: $('#tools-filter'),
-  },
-
-  // proposal (final only)
-  proposal: {
-    card: $('#proposal-card'),
-    preview: $('#proposal-preview'),
-    copyProposal: $('#copy-proposal'),
-    copyPpt: $('#copy-ppt'),
-    copyAi: $('#copy-ai-proposal'),
-  },
-
-
-
-  // module composer
-  moduleBar: $('#module-bar'),
-  moduleCount: $('#module-count'),
-  moduleBtn: $('#module-create'),
-  modal: $('#modal'),
-  modalTitle: $('#m-title'),
-  modalKind: $('#m-kind'),
-  modalMinutes: $('#m-minutes'),
-  modalNote: $('#m-note'),
-  modalCancel: $('#m-cancel'),
-  modalCreate: $('#m-create'),
-};
-
-/* ===================== STATE ===================== */
-const store = {
-  activeTab: 'idea',
-  lists: { idea: [], draft: [], final: [] },
-  current: null, // current editor object
-  tools: [],
-  finalSelections: new Set(),
-};
-
-/* ===================== UTIL ===================== */
-function toast(msg, type = 'ok') {
-  if (!els.toast) return;
-  els.toast.textContent = msg;
-  els.toast.classList.remove('hide');
-  els.toast.dataset.type = type;
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => els.toast.classList.add('hide'), 2200);
+function toast(msg){
+  toastLine.textContent = msg;
 }
 
-
-async function copyText(text) {
-  const t = String(text ?? '');
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(t);
-      return true;
-    }
-  } catch (e) {}
-  // fallback
-  const ta = document.createElement('textarea');
-  ta.value = t;
-  ta.setAttribute('readonly', '');
-  ta.style.position = 'fixed';
-  ta.style.left = '-9999px';
-  ta.style.top = '-9999px';
-  document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand('copy'); } catch (e) {}
-  document.body.removeChild(ta);
-  return true;
-}
-
-function buildProposalTexts_(obj) {
-  const title = (obj.title || '').trim() || '（未命名課程）';
-  const kind = (obj.kind || '').trim();
-  const audience = (obj.audience || '').trim();
-  const dur = (obj.duration_min || '').trim();
-  const tags = (obj.tags || '').trim();
-  const summary = (obj.summary || '').trim();
-  const outline = (obj.outline || '').trim();
-  const tools = (obj.tools_used || '').trim();
-  const links = (obj.links || '').trim();
-
-  const proposal = [
-    `【提案名稱】${title}`,
-    kind ? `【形式】${kind}` : null,
-    audience ? `【對象】${audience}` : null,
-    dur ? `【時長/節律】${dur}` : null,
-    tags ? `【痛點/標籤】${tags}` : null,
-    '',
-    '【一句話定位】',
-    summary || '（請在 summary 補上一段對外版定位／亮點）',
-    '',
-    '【課程/活動流程】',
-    outline || '（請在 outline 補上正式版流程或堂次）',
-    '',
-    tools ? '【工具配方】\n' + tools : null,
-    links ? '【相關連結】\n' + links : null,
-  ].filter(Boolean).join('\n');
-
-  const pptLines = [];
-  pptLines.push(title);
-  pptLines.push('1. 開場：為什麼要做這堂（痛點/場景）');
-  pptLines.push('2. 目標：這堂課想帶走什麼');
-  pptLines.push('3. 方法：幸福教養×腦科學一句話');
-  pptLines.push('4. 流程：課程/活動安排（重點節點）');
-  pptLines.push('5. 工具：主工具/副工具怎麼用');
-  pptLines.push('6. 練習與作業：怎麼帶回生活');
-  pptLines.push('7. 回饋與追蹤：怎麼確認有前進');
-  pptLines.push('8. Q&A / 收尾定錨');
-  if (outline) {
-    pptLines.push('');
-    pptLines.push('— 你的既有大綱（可拆頁） —');
-    outline.split(/\r?\n/).filter(Boolean).forEach((l) => pptLines.push(`• ${l.trim()}`));
-  }
-  if (tools) {
-    pptLines.push('');
-    pptLines.push('— 工具配方 —');
-    tools.split(/\r?\n/).filter(Boolean).forEach((l) => pptLines.push(`• ${l.trim()}`));
-  }
-  return { proposal, ppt: pptLines.join('\n') };
-}
-
-function buildAiProposalPrompt_(obj) {
-  const stateZh = '完稿';
-  const title = (obj.title || '').trim();
-  const type = (obj.type || '').trim();
-  const audience = (obj.audience || '').trim();
-  const tags = (obj.tags || '').trim();
-  const dur = (obj.duration_min || '').trim();
-  const cap = (obj.capacity || '').trim();
-  const closing = (obj.closing_line || obj.notes || '').trim(); // backward compatible
-  const tools = (obj.tools_used || '').trim();
-  const links = (obj.links || '').trim();
-  const framework = (obj.outline || '').trim();
-
-  return `你是「天使笑長」的協作夥伴。請用溫柔、清楚、不說教的語氣，幫我把課程從「${stateZh}」整理成對外可直接使用的提案包。\n\n` +
-`0｜已輸入資料（請以此為準，不要改名、不重問）\n` +
-`課程名稱：${title}\n` +
-`類型：${type}\n` +
-`對象：${audience}\n` +
-`時長/人數：${dur}分鐘｜${cap || '（可空白）'}人\n` +
-`關鍵痛點/標籤：${tags}\n` +
-`工具：\n${tools || '（可空白）'}\n` +
-`工具連結：\n${links || '（可空白）'}\n` +
-`核心流程架構：\n${framework || '（可空白）'}\n` +
-`收尾定錨：${closing || '（可空白）'}\n\n` +
-`1｜請你輸出五份成果（務必分段標題）\n` +
-`A) 對外提案版文案（定位、亮點、適用場域）\n` +
-`B) 詳細流程（現場/線上節奏、每段引導語）\n` +
-`C) 練習與作業（含教材/講義清單）\n` +
-`D) 回饋與追蹤方案（每週回饋題/追蹤方式）\n` +
-`E) PPT 大綱（逐頁標題＋要點）\n\n` +
-`2｜最後請再輸出：表單橫向一列（用 tab 分隔）\n` +
-`id\ttitle\ttype\tstatus\tversion\towner\taudience\tduration_min\tcapacity\ttags\tsummary\tobjectives\toutline\tmaterials\tlinks\tassets\tnotes\tcreated_at\tupdated_at`;
-}
-
-function refreshProposalUI_() {
-  const state = els.editor.state.value || store.activeTab;
-  const show = (state === 'final');
-  if (els.proposal?.card) els.proposal.card.classList.toggle('hide', !show);
-  if (!show) return;
-  const obj = editorToObj();
-  const { proposal } = buildProposalTexts_(obj);
-  if (els.proposal.preview) els.proposal.preview.value = proposal;
-}
-function safeJsonParse(s, fallback = null) {
-  try { return JSON.parse(s); } catch { return fallback; }
-}
-
-function nowISO() { return new Date().toISOString(); }
-
-function pick(v) { return (v === undefined || v === null) ? '' : String(v); }
-
-function normalizeKind() {
-  const k = els.editor.kind.value;
-  const other = els.editor.kindOther.value.trim();
-  els.editor.kindOther.classList.toggle('hide', k !== '其他');
-  return k === '其他' ? other : k;
-}
-
-function editorToObj() {
-  const state = els.editor.state.value;
-  const kind = normalizeKind();
+function readSettings(){
+  const saved = JSON.parse(localStorage.getItem("angelCourseWB.settings") || "{}");
   return {
-    id: els.editor.id.value.trim(),
-    title: els.editor.title.value.trim(),
-    type: els.editor.type.value,
-    kind: els.editor.kind.value,
-    kind_other: els.editor.kind.value === '其他' ? els.editor.kindOther.value.trim() : '',
-    audience: els.editor.audience.value.trim(),
-    duration_min: els.editor.duration.value.trim(),
-    tags: els.editor.tags.value.trim(),
-    status: els.editor.status.value.trim(),
-    summary: els.editor.summary.value.trim(),
-    outline: els.editor.outline.value.trim(),
-    links: els.editor.links.value.trim(),
-    script: els.editor.script.value.trim(),
-    tools_used: els.editor.toolsUsed.value.trim(),
-    updated_at: nowISO(),
-    // schedule fields (single by default)
-    schedule_mode: 'single',
-    single_duration: els.editor.duration.value.trim(),
-    // keep state as info (not required, but handy)
-    state,
+    courseApi: saved.courseApi || DEFAULT_COURSE_API,
+    toolsApi:  saved.toolsApi  || DEFAULT_TOOLS_API,
   };
 }
 
-function objToEditor(obj, state) {
-  store.current = obj ? { ...obj   refreshProposalUI_();
-} : null;
-  els.editor.state.value = state;
-  els.editor.id.value = pick(obj?.id);
-  els.editor.title.value = pick(obj?.title);
-  els.editor.type.value = pick(obj?.type) || 'course';
-  const k = pick(obj?.kind) || '';
-  const kindOptions = ['演講', '模組課程', '單場課程', '單場活動', '其他'];
-  els.editor.kind.value = kindOptions.includes(k) ? k : (k ? '其他' : '單場課程');
-  els.editor.kindOther.value = pick(obj?.kind_other || (els.editor.kind.value === '其他' ? k : ''));
-  normalizeKind();
-  els.editor.audience.value = pick(obj?.audience);
-  els.editor.duration.value = pick(obj?.duration_min || obj?.single_duration);
-  els.editor.tags.value = pick(obj?.tags);
-  els.editor.status.value = pick(obj?.status);
-  els.editor.summary.value = pick(obj?.summary);
-  els.editor.outline.value = pick(obj?.outline);
-  els.editor.links.value = pick(obj?.links);
-  els.editor.script.value = pick(obj?.script);
-  els.editor.toolsUsed.value = pick(obj?.tools_used);
+function saveSettings(obj){
+  localStorage.setItem("angelCourseWB.settings", JSON.stringify(obj));
 }
 
-function clearEditor(keepState = true) {
-  const state = keepState ? els.editor.state.value : 'idea';
-  objToEditor(null, state);
-  els.editor.id.value = '';
+/* ====== NETWORK ====== */
+async function apiPing(url){
+  const u = new URL(url);
+  u.searchParams.set("mode","ping");
+  const res = await fetch(u.toString(), { method:"GET" });
+  return await res.json();
 }
 
-function makeCard({ title, sub, right, body, checked, checkbox }) {
-  const div = document.createElement('div');
-  div.className = 'card';
-  div.innerHTML = `
-    <div class="card-title">
-      <div class="row" style="gap:10px; align-items:center;">
-        ${checkbox ? `<input class="chk" type="checkbox" ${checked ? 'checked' : ''} />` : ''}
-        <div style="flex:1; min-width:0;">
-          <div style="font-weight:800;">${escapeHtml(title || '未命名')}</div>
-          ${sub ? `<div class="sub">${escapeHtml(sub)}</div>` : ''}
-        </div>
-      </div>
-      ${right ? `<span class="pill">${escapeHtml(right)}</span>` : ''}
-    </div>
-    ${body ? `<div class="card-body">${escapeHtml(body)}</div>` : ''}
-  `;
-  return div;
+async function apiList(state, {q=""}={}){
+  const { courseApi } = readSettings();
+  const u = new URL(courseApi);
+  u.searchParams.set("mode","list");
+  u.searchParams.set("state", state);
+  if(q) u.searchParams.set("q", q);
+  u.searchParams.set("limit","300");
+  const res = await fetch(u.toString(), { method:"GET" });
+  const json = await res.json();
+  if(!json || !json.ok) throw new Error(json?.error || "list failed");
+  return json.items || [];
 }
 
-function escapeHtml(s) {
-  return String(s || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+async function apiGet(state, id){
+  const { courseApi } = readSettings();
+  const u = new URL(courseApi);
+  u.searchParams.set("mode","get");
+  u.searchParams.set("state", state);
+  u.searchParams.set("id", id);
+  const res = await fetch(u.toString(), { method:"GET" });
+  const json = await res.json();
+  if(!json || !json.ok) throw new Error(json?.error || "get failed");
+  return json.item;
 }
 
-/* ===================== API ===================== */
-async function apiCourseList(state, q = '') {
-  const url = new URL(CONFIG.courseApi);
-  url.searchParams.set('mode', 'list');
-  url.searchParams.set('state', state);
-  url.searchParams.set('limit', String(CONFIG.listLimit));
-  if (q) url.searchParams.set('q', q);
-  const res = await fetch(url.toString(), { method: 'GET' });
-  return res.json();
-}
+async function apiUpsert(state, item){
+  const { courseApi } = readSettings();
+  const u = new URL(courseApi);
+  u.searchParams.set("mode","upsert");
+  u.searchParams.set("state", state);
 
-async function apiCourseUpsert(state, item) {
-  const url = new URL(CONFIG.courseApi);
-  url.searchParams.set('mode', 'upsert');
-  url.searchParams.set('state', state);
-  const res = await fetch(url.toString(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ item }),
+  // Important: avoid preflight; use text/plain + JSON string
+  const res = await fetch(u.toString(), {
+    method:"POST",
+    headers: { "Content-Type":"text/plain;charset=utf-8" },
+    body: JSON.stringify({ item })
   });
-  return res.json();
+  const json = await res.json();
+  if(!json || !json.ok) throw new Error(json?.error || "save failed");
+  return json;
 }
 
-async function apiCourseDelete(state, id) {
-  const url = new URL(CONFIG.courseApi);
-  url.searchParams.set('mode', 'delete');
-  url.searchParams.set('state', state);
-  url.searchParams.set('id', id);
-  const res = await fetch(url.toString(), { method: 'GET' });
-  return res.json();
+async function apiPromote(from, to, id){
+  const { courseApi } = readSettings();
+  const u = new URL(courseApi);
+  u.searchParams.set("mode","promote");
+  u.searchParams.set("from", from);
+  u.searchParams.set("to", to);
+  u.searchParams.set("id", id);
+  u.searchParams.set("overwrite", "1");
+  const res = await fetch(u.toString(), { method:"GET" });
+  const json = await res.json();
+  if(!json || !json.ok) throw new Error(json?.error || "promote failed");
+  return json;
 }
 
-async function apiToolsList() {
-  const res = await fetch(CONFIG.toolsApi, { method: 'GET' });
-  return res.json();
+async function apiDelete(state, id){
+  const { courseApi } = readSettings();
+  const u = new URL(courseApi);
+  u.searchParams.set("mode","delete");
+  u.searchParams.set("state", state);
+  u.searchParams.set("id", id);
+  const res = await fetch(u.toString(), { method:"GET" });
+  const json = await res.json();
+  if(!json || !json.ok) throw new Error(json?.error || "delete failed");
+  return json;
 }
 
-/* ===================== RENDER ===================== */
-function renderCourseList(state) {
-  const listEl = els.list[state];
-  const q = els.search[state].value.trim().toLowerCase();
-  listEl.innerHTML = '';
+async function toolsFetchAll(){
+  const { toolsApi } = readSettings();
+  const res = await fetch(toolsApi, { method:"GET" });
+  const json = await res.json();
 
-  const items = (store.lists[state] || []).filter(it => {
-    if (!q) return true;
-    const hay = `${it.id || ''} ${it.title || ''} ${it.tags || ''} ${it.summary || ''}`.toLowerCase();
-    return hay.includes(q);
-  });
-
-  if (!items.length) {
-    const empty = document.createElement('div');
-    empty.className = 'muted';
-    empty.textContent = '目前沒有資料。你可以按「新增一筆」，先把它寫下來。';
-    listEl.appendChild(empty);
-    return;
-  }
-
-  items.forEach(it => {
-    const right = it.kind || it.type || '';
-    const sub = [it.id, it.status].filter(Boolean).join(' · ');
-    const body = it.summary || '';
-
-    const checkbox = (state === 'final') && isSingleFinal_(it);
-    const checked = checkbox ? store.finalSelections.has(it.id) : false;
-    const card = makeCard({
-      title: it.title || '未命名',
-      sub,
-      right,
-      body,
-      checkbox,
-      checked,
-    });
-    card.dataset.id = it.id;
-    card.dataset.state = state;
-    card.addEventListener('click', (ev) => {
-      // checkbox click should not load editor
-      if (ev.target && ev.target.classList.contains('chk')) return;
-      objToEditor(it, state);
-      toast(`已載入：${it.title || it.id}`);
-    });
-    if (checkbox) {
-      const chk = $('.chk', card);
-      chk.addEventListener('change', () => {
-        if (!it.id) return;
-        if (chk.checked) store.finalSelections.add(it.id);
-        else store.finalSelections.delete(it.id);
-        updateModuleBar_();
-      });
-    }
-    listEl.appendChild(card);
-  });
+  // Accept both formats:
+  // A) { ok:true, tools:[...] }
+  // B) { ok:true, items:[...] }
+  const arr = json?.tools || json?.items || [];
+  if(!json?.ok) throw new Error(json?.error || "tools api failed");
+  toolsAll = arr.map(t => normalizeTool(t)).filter(t=>t.toolCode || t.name);
+  return toolsAll;
 }
 
-function isSingleFinal_(it) {
-  const mode = String(it.schedule_mode || '').toLowerCase();
-  if (mode === 'module') return false;
-  const kind = String(it.kind || '').trim();
-  // 你要「單場完稿」才能被拿去組模組
-  return ['演講', '單場課程', '單場活動'].includes(kind) || !kind;
+function normalizeTool(t){
+  const toolCode = String(t.toolCode || t["工具ID"] || "").trim();
+  const name = String(t.name || t["工具名稱"] || "").trim();
+  const link = String(t.link || t["工具連結"] || "").trim();
+  const category = String(t.category || t["性質分類"] || "").trim();
+  const core = String(t.core || t["核心功能"] || "").trim();
+  const pain_points = String(t.pain_points || t["適用對象/痛點"] || "").trim();
+  const tips = String(t.tips || t["智多星錦囊"] || "").trim();
+  const status = String(t.status || "active").trim().toLowerCase();
+  const toolUid = String(t.toolUid || t.tool_uid || t.tool_id || "").trim() || stableUid(toolCode, link);
+  return { toolCode, name, link, category, core, pain_points, tips, status, toolUid };
 }
 
-function updateModuleBar_() {
-  const n = store.finalSelections.size;
-  els.moduleBar.classList.toggle('hide', store.activeTab !== 'final');
-  els.moduleCount.textContent = n ? `已勾選 ${n} 堂` : '可勾選多堂「單場完稿」，組合成模組課程';
-  els.moduleBtn.disabled = n < 2;
+function stableUid(toolCode, link){
+  const raw = (String(toolCode||"")+"|"+String(link||"")).toLowerCase();
+  let h=0;
+  for(let i=0;i<raw.length;i++){ h = ((h<<5)-h) + raw.charCodeAt(i); h |= 0; }
+  return "tool_"+Math.abs(h);
 }
 
-function renderTools() {
-  const listEl = els.tools.list;
-  const q = els.tools.filter.value.trim().toLowerCase();
-  listEl.innerHTML = '';
-
-  const items = (store.tools || []).filter(it => {
-    if (!q) return true;
-    const hay = `${it.toolCode || ''} ${it.name || ''} ${it.core || ''} ${it.pain_points || ''} ${it.category || ''}`.toLowerCase();
-    return hay.includes(q);
-  });
-
-  if (!items.length) {
-    const empty = document.createElement('div');
-    empty.className = 'muted';
-    empty.textContent = '找不到工具。你可以清掉關鍵字，或確認「工具庫存管理」分頁有資料。';
-    listEl.appendChild(empty);
-    return;
-  }
-
-  items.forEach(it => {
-    const title = `${it.toolCode || ''} ${it.name || ''}`.trim() || '未命名工具';
-    const sub = [it.category, it.status].filter(Boolean).join(' · ');
-    const body = it.core || it.tips || '';
-    const card = makeCard({ title, sub, right: '工具', body });
-    card.addEventListener('click', () => {
-      // 一鍵加入「工具使用」欄位（逗號分隔）
-      const code = (it.toolCode || it.name || '').trim();
-      if (!code) return;
-      const cur = els.editor.toolsUsed.value.split(',').map(s => s.trim()).filter(Boolean);
-      if (!cur.includes(code)) cur.push(code);
-      els.editor.toolsUsed.value = cur.join(', ');
-      toast(`已加入工具：${code}`);
-    });
-    listEl.appendChild(card);
-  });
-}
-
-/* ===================== ACTIONS ===================== */
-async function loadState(state, silent = false) {
-  if (!silent) toast(`抓取 ${STATE_LABEL[state]}...`);
-  const data = await apiCourseList(state, '');
-  if (!data?.ok) {
-    toast(`抓取失敗：${data?.error || '未知錯誤'}`, 'err');
-    return;
-  }
-  store.lists[state] = data.items || [];
-  renderCourseList(state);
-  if (!silent) toast(`已更新 ${STATE_LABEL[state]}：${data.count || 0} 筆`);
-}
-
-async function saveCurrent() {
-  const state = els.editor.state.value;
-  const item = editorToObj();
-  if (!item.title) {
-    toast('先給它一個標題（title）就好。', 'err');
-    els.editor.title.focus();
-    return;
-  }
-
-  toast('正在存入後臺...');
-  const res = await apiCourseUpsert(state, item);
-  if (!res?.ok) {
-    toast(`存檔失敗：${res?.error || '未知錯誤'}`, 'err');
-    return;
-  }
-  // server may generate id
-  const saved = res.item || item;
-  objToEditor(saved, state);
-  await loadState(state, true);
-  toast(`已存入 ${STATE_LABEL[state]} ✅`);
-}
-
-async function deleteCurrent() {
-  const state = els.editor.state.value;
-  const id = els.editor.id.value.trim();
-  if (!id) {
-    toast('這筆還沒有 id，不需要刪。', 'err');
-    return;
-  }
-  if (!confirm(`確定刪除這筆嗎？\n${id}`)) return;
-  toast('刪除中...');
-  const res = await apiCourseDelete(state, id);
-  if (!res?.ok) {
-    toast(`刪除失敗：${res?.error || '未知錯誤'}`, 'err');
-    return;
-  }
-  clearEditor(true);
-  await loadState(state, true);
-  toast('已刪除');
-}
-
-function saveLocal() {
-  const state = els.editor.state.value;
-  const item = editorToObj();
-  const key = `angel_course_local_${state}`;
-  localStorage.setItem(key, JSON.stringify({ saved_at: nowISO(), item }));
-  toast('已存本機草稿（localStorage）');
-}
-
-function loadLocal() {
-  const state = els.editor.state.value;
-  const key = `angel_course_local_${state}`;
-  const raw = localStorage.getItem(key);
-  const data = safeJsonParse(raw, null);
-  if (!data?.item) {
-    toast('本機沒有草稿。', 'err');
-    return;
-  }
-  objToEditor(data.item, state);
-  toast('已叫出本機草稿');
-}
-
-function clearLocal() {
-  const state = els.editor.state.value;
-  const key = `angel_course_local_${state}`;
-  localStorage.removeItem(key);
-  toast('已清空本機草稿');
-}
-
-/* ===================== MODULE COMPOSE ===================== */
-function openModal() {
-  els.modal.classList.remove('hide');
-  els.modalTitle.value = '';
-  els.modalKind.value = '模組課程';
-  els.modalMinutes.value = '';
-  els.modalNote.value = '';
-  setTimeout(() => els.modalTitle.focus(), 50);
-}
-
-function closeModal() {
-  els.modal.classList.add('hide');
-}
-
-async function createModuleFromSelections() {
-  const ids = Array.from(store.finalSelections);
-  if (ids.length < 2) {
-    toast('至少勾選 2 堂單場完稿，才可以組模組。', 'err');
-    return;
-  }
-  const title = els.modalTitle.value.trim();
-  if (!title) {
-    toast('請填「模組名稱」。', 'err');
-    els.modalTitle.focus();
-    return;
-  }
-
-  // find selected items
-  const map = new Map((store.lists.final || []).map(it => [String(it.id || ''), it]));
-  const children = ids.map(id => map.get(String(id))).filter(Boolean);
-  const childTitles = children.map(it => it.title).filter(Boolean);
-
-  const moduleItem = {
-    title,
-    type: 'course',
-    kind: els.modalKind.value,
-    schedule_mode: 'module',
-    module_sessions: String(children.length),
-    session_minutes: els.modalMinutes.value.trim(),
-    status: 'ready',
-    tags: '',
-    summary: `由 ${children.length} 堂單場完稿組合而成。`,
-    outline: childTitles.map((t, i) => `${String(i + 1).padStart(2, '0')}｜${t}`).join('\n'),
-    notes: els.modalNote.value.trim(),
-    module_children: JSON.stringify({ ids, titles: childTitles }),
-    updated_at: nowISO(),
+/* ====== FORM ====== */
+function clearForm(){
+  current = {
+    id:"",
+    title:"",
+    kind:"單場演講",
+    kind_other:"",
+    duration_min:"",
+    total_duration:"",
+    capacity:"",
+    location:"",
+    venue_type:"室內",
+    core_concept:"",
+    tags:"",
+    summary:"",
+    objectives:"",
+    outline:"",
+    materials:"",
+    links:"",
+    assets:"",
+    notes:"",
+    main_tool:"",
+    sub_tools:"",
+    tool_uids:"",
+    module_items:""
   };
-
-  toast('正在建立模組...');
-  const res = await apiCourseUpsert('final', moduleItem);
-  if (!res?.ok) {
-    toast(`建立失敗：${res?.error || '未知錯誤'}`, 'err');
-    return;
-  }
-
-  // reset selections
-  store.finalSelections.clear();
-  closeModal();
-  await loadState('final', true);
-  updateModuleBar_();
-  toast('模組已建立並存入完稿 ✅');
+  pickedMainTool = null;
+  pickedSubTools = [];
+  writeForm();
+  rebuildPreviews();
+  updateProposalPreview();
 }
 
-/* ===================== TOOLS ===================== */
-async function refreshTools() {
-  toast('抓取工具庫存...');
-  const data = await apiToolsList();
-  if (!data?.ok) {
-    toast(`工具抓取失敗：${data?.error || '未知錯誤'}`, 'err');
-    return;
-  }
-  // 兼容不同後端：items 或 tools
-  store.tools = data.items || data.tools || data.data || [];
-  renderTools();
-  toast(`已更新工具：${store.tools.length} 筆`);
+function readForm(){
+  const item = Object.assign({}, current);
+  item.id = $("#f_id").value.trim();
+  item.title = $("#f_title").value.trim();
+
+  item.kind = $("#f_kind").value;
+  item.kind_other = $("#f_kind_other").value.trim();
+
+  item.duration_min = $("#f_duration_min").value.trim();
+  item.total_duration = $("#f_total_duration").value.trim();
+
+  item.capacity = $("#f_capacity").value.trim();
+  item.location = $("#f_location").value.trim();
+  item.venue_type = $("#f_venue_type").value;
+
+  item.core_concept = $("#f_core_concept").value.trim();
+  item.summary = $("#f_summary").value.trim();
+
+  // tool fields maintained by picker
+  item.main_tool = pickedMainTool ? `${pickedMainTool.toolCode}｜${pickedMainTool.name}` : "";
+  item.sub_tools = pickedSubTools.map(t=>`${t.toolCode}｜${t.name}`).join("；");
+  item.tool_uids = [
+    pickedMainTool ? pickedMainTool.toolUid : "",
+    ...pickedSubTools.map(t=>t.toolUid)
+  ].filter(Boolean).join(",");
+
+  // derived helper fields
+  item.type = kindToType(item.kind);
+  item.status = state; // layer status
+  item.updated_at = new Date().toISOString();
+
+  // links: ensure tools included
+  const toolLinks = [];
+  if(pickedMainTool?.link) toolLinks.push(pickedMainTool.link);
+  pickedSubTools.forEach(t=> t.link && toolLinks.push(t.link));
+  const mergedLinks = mergeLinks(item.links || "", toolLinks);
+  item.links = mergedLinks;
+
+  // tags: auto from kind + venue + maybe tool codes
+  item.tags = buildTags(item);
+
+  return item;
 }
 
-/* ===================== TAB ===================== */
-function showTab(tab) {
-  store.activeTab = tab;
-  els.tabBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  els.panels.forEach(p => p.classList.toggle('active', p.id === `panel-${tab}`));
-  // keep editor state in sync
-  if (['idea', 'draft', 'final'].includes(tab)) {
-    els.editor.state.value = tab;
-    updateModuleBar_();
-    refreshProposalUI_();
-  }
+function writeForm(){
+  $("#f_id").value = current.id || "";
+  $("#f_title").value = current.title || "";
+  $("#f_kind").value = current.kind || "單場演講";
+  $("#f_kind_other").value = current.kind_other || "";
+  $("#f_duration_min").value = current.duration_min || "";
+  $("#f_total_duration").value = current.total_duration || "";
+  $("#f_capacity").value = current.capacity || "";
+  $("#f_location").value = current.location || "";
+  $("#f_venue_type").value = current.venue_type || "室內";
+  $("#f_core_concept").value = current.core_concept || "";
+  $("#f_summary").value = current.summary || "";
+
+  // tool lines
+  renderPickedTools();
 }
 
-/* ===================== INIT ===================== */
-function bind() {
-  // tabs
-  els.tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const tab = btn.dataset.tab;
-      showTab(tab);
-    });
-  });
+function kindToType(kind){
+  // keep a stable type for filtering
+  if(kind === "模組課程") return "module";
+  if(kind === "單場演講") return "talk";
+  if(kind === "單場課程") return "single_class";
+  if(kind === "單場活動") return "single_event";
+  if(kind === "研習（有作業）") return "training";
+  return "other";
+}
 
-  // list actions
-  ['idea', 'draft', 'final'].forEach(state => {
-    els.refresh[state].addEventListener('click', () => loadState(state));
-    els.search[state].addEventListener('input', () => renderCourseList(state));
-    els.newBtn[state].addEventListener('click', () => {
-      showTab(state);
-      clearEditor(true);
-      els.editor.state.value = state;
-      // default for new
-      els.editor.kind.value = (state === 'final') ? '單場課程' : '其他';
-      normalizeKind();
-      toast('新增一筆：你可以先寫標題就好。');
-    });
-  });
+function mergeLinks(existing, toolLinks){
+  const norm = (s)=>String(s||"").trim();
+  const list = [];
+  const push = (u)=>{ const v=norm(u); if(v && !list.includes(v)) list.push(v); };
 
-  // editor
-  els.editor.kind.addEventListener('change', normalizeKind);
-  els.editorActions.save.addEventListener('click', saveCurrent);
-  els.editorActions.clear.addEventListener('click', () => clearEditor(true));
-  els.editorActions.delete.addEventListener('click', deleteCurrent);
+  // split existing by whitespace/;,/newlines
+  norm(existing).split(/[\s,;，；\n]+/).forEach(push);
+  toolLinks.forEach(push);
+  return list.join("\n");
+}
 
-  // local
-  els.local.save.addEventListener('click', saveLocal);
-  els.local.load.addEventListener('click', loadLocal);
-  els.local.clear.addEventListener('click', clearLocal);
+function buildTags(item){
+  const tags = new Set();
+  if(item.kind) tags.add(item.kind);
+  if(item.venue_type) tags.add(item.venue_type);
+  if(pickedMainTool?.toolCode) tags.add(pickedMainTool.toolCode);
+  return Array.from(tags).join(" ");
+}
 
-  // tools
-  els.tools.refresh.addEventListener('click', refreshTools);
-  els.tools.filter.addEventListener('input', renderTools);
+function renderPickedTools(){
+  $("#mainToolLine").textContent = pickedMainTool ? `${pickedMainTool.toolCode}｜${pickedMainTool.name}` : "未選";
+  $("#subToolsLine").textContent = pickedSubTools.length ? pickedSubTools.map(t=>`${t.toolCode}｜${t.name}`).join("、") : "未選";
+}
 
-  // module
-  els.moduleBtn.addEventListener('click', openModal);
-  els.modalCancel.addEventListener('click', closeModal);
-  els.modal.addEventListener('click', (e) => { if (e.target === els.modal) closeModal(); });
-  els.modalCreate.addEventListener('click', createModuleFromSelections);
+function rebuildPreviews(){
+  const item = readForm();
+  $("#aiPreview").value = buildAIPrompt(item);
+  $("#tsvPreview").value = buildTSVLine(item);
+  updateProposalPreview(item);
+}
 
-  // proposal (final only)
-  els.proposal.copyProposal.addEventListener('click', () => {
-    const obj = editorToObj();
-    const { proposal } = buildProposalTexts_(obj);
-    copyText(proposal);
-    toast('已複製：對外提案文案');
-  });
-  els.proposal.copyPpt.addEventListener('click', () => {
-    const obj = editorToObj();
-    const { ppt } = buildProposalTexts_(obj);
-    copyText(ppt);
-    toast('已複製：PPT 大綱');
-  });
-  els.proposal.copyAi.addEventListener('click', () => {
-    const obj = editorToObj();
-    const ai = buildAiProposalPrompt_(obj);
-    copyText(ai);
-    toast('已複製：AI 提案指令');
-  });
+function buildAIPrompt(item){
+  const kindText = item.kind === "其他" ? `其他：${item.kind_other || "（未填）"}` : item.kind;
+  const mainTool = item.main_tool || "（未選）";
+  const subTools = item.sub_tools || "（未選）";
 
-  // live preview for proposal
-  const proposalInputs = [
-    els.editor.title, els.editor.type, els.editor.kind, els.editor.kindOther,
-    els.editor.audience, els.editor.duration, els.editor.tags, els.editor.status,
-    els.editor.summary, els.editor.outline, els.editor.links, els.editor.toolsUsed
+  return [
+`你是「天使笑長」的協作夥伴。請用溫柔、可落地、不說教的語氣，協助我完成一份課程/活動企劃。`,
+``,
+`【已知資料】`,
+`- 主題：${item.title || "（未填）"}`,
+`- 形式：${kindText}`,
+`- 單堂時數：${item.duration_min || "（未填）"}；總時數：${item.total_duration || "（未填）"}`,
+`- 人數：${item.capacity || "（未填）"}`,
+`- 地點：${item.location || "（未填）"}（${item.venue_type || "（未填）"}）`,
+`- 核心概念：${item.core_concept || "（未填）"}`,
+`- 工具書搭配：主工具：${mainTool}；副工具：${subTools}`,
+`- 活動簡述：${item.summary || "（未填）"}`,
+``,
+`【請產出】`,
+`a. 建議活動名稱（至少 5 個）`,
+`b. 活動內容（面向家長/老師可理解的描述）`,
+`c. 活動流程（含時間分配）`,
+`d. 活動 KPI 與回饋方式（如何看見成效）`,
+`e. 活動簡案（提案用：一頁版）`,
+`f. 活動詳案（備課用：含 PPT 教材大綱 + 口說稿架構 + 作業/練習設計）`,
+``,
+`【格式要求】`,
+`- 內容要能直接複製到我的課程管理表`,
+`- 列點清楚、用語能說出口`,
+`- 每一段都要把「工具書如何用」自然寫進去（不可忽略）`,
+  ].join("\n");
+}
+
+function buildTSVLine(item){
+  // TSV = Tab-Separated Values：用「Tab」分隔欄位（貼到試算表最穩）
+  const cols = [
+    item.id || "",
+    item.title || "",
+    item.type || "",
+    item.status || "",
+    item.version || "",
+    item.owner || "",
+    item.audience || "",
+    item.duration_min || "",
+    item.capacity || "",
+    item.tags || "",
+    item.summary || "",
+    item.objectives || "",
+    item.outline || "",
+    item.materials || "",
+    item.links || "",
+    item.assets || "",
+    item.notes || "",
+    item.created_at || "",
+    item.updated_at || "",
   ];
-  proposalInputs.forEach(el => el.addEventListener('input', () => refreshProposalUI_()));
+
+  // Auto clean newlines inside cells -> replace with " / "
+  const clean = (s)=>String(s||"").replace(/\r?\n+/g, " / ").trim();
+  return cols.map(clean).join("\t");
 }
 
-async function boot() {
-  bind();
-  showTab('idea');
-  clearEditor(true);
-  // initial load
-  await Promise.all([
-    loadState('idea', true),
-    loadState('draft', true),
-    loadState('final', true),
-    refreshTools(),
-  ]);
-  renderCourseList('idea');
-  updateModuleBar_();
-  toast('已就緒');
+/* ====== LIST RENDER ====== */
+function renderList(items){
+  const root = $("#list");
+  root.innerHTML = "";
+
+  if(!items.length){
+    root.innerHTML = `<div class="hint" style="padding:12px 16px;">（這個狀態目前沒有資料）</div>`;
+    return;
+  }
+
+  for(const it of items){
+    const el = document.createElement("div");
+    el.className = "item";
+    const meta = [
+      `ID：${it.id || "—"}`,
+      `形式：${it.kind || it.type || "—"}`,
+      `人數：${it.capacity || "—"}`,
+      `時數：${it.duration_min || "—"}${it.total_duration ? " / "+it.total_duration : ""}`,
+      `主工具：${it.main_tool || "—"}`
+    ].join("｜");
+
+    const nextAction = (state==="idea") ? "升級到草稿" : (state==="draft" ? "升級到完稿" : "—");
+    const nextState = (state==="idea") ? "draft" : (state==="draft" ? "final" : null);
+
+    el.innerHTML = `
+      <div class="itemMain">
+        <div class="itemTitle">${escapeHtml(it.title || "(未命名)")}</div>
+        <div class="itemMeta">${escapeHtml(meta)}</div>
+      </div>
+      <div class="itemActions">
+        <button class="pill ok" data-act="load" data-id="${escapeAttr(it.id)}">載入</button>
+        ${nextState ? `<button class="pill" data-act="promote" data-id="${escapeAttr(it.id)}" data-to="${nextState}">${nextAction}</button>` : `<span class="pill">完稿</span>`}
+        <button class="pill danger" data-act="delete" data-id="${escapeAttr(it.id)}">刪除</button>
+      </div>
+    `;
+    root.appendChild(el);
+  }
+
+  root.addEventListener("click", onListClick, { once:true });
 }
 
-boot();
+async function onListClick(e){
+  const btn = e.target.closest("[data-act]");
+  if(!btn) return;
+  const act = btn.dataset.act;
+  const id = btn.dataset.id;
+
+  try{
+    if(act === "load"){
+      const item = await apiGet(state, id);
+      loadItemToEditor(item);
+      toast(`已載入：${id}`);
+    }
+    if(act === "promote"){
+      const to = btn.dataset.to;
+      await apiPromote(state, to, id);
+      toast(`已升級：${id} → ${STATE_LABEL[to]}`);
+      await reloadCurrentState();
+    }
+    if(act === "delete"){
+      const ok = confirm(`確定刪除 ${id}？（可在試算表復原也可以）`);
+      if(!ok) return;
+      await apiDelete(state, id);
+      toast(`已刪除：${id}`);
+      await reloadCurrentState();
+      if(current.id === id) clearForm();
+    }
+  }catch(err){
+    toast(`失敗：${err.message || err}`);
+  }finally{
+    // rebind click handler
+    $("#list").addEventListener("click", onListClick, { once:true });
+  }
+}
+
+function loadItemToEditor(item){
+  current = Object.assign({}, item);
+
+  // restore tools
+  pickedMainTool = null;
+  pickedSubTools = [];
+
+  if(item.main_tool){
+    const code = String(item.main_tool).split("｜")[0].trim();
+    pickedMainTool = toolsAll.find(t=>t.toolCode===code) || pickedMainTool;
+  }
+  if(item.sub_tools){
+    const codes = String(item.sub_tools).split(/；|,|，/).map(s=>s.split("｜")[0].trim()).filter(Boolean);
+    pickedSubTools = codes.map(c=>toolsAll.find(t=>t.toolCode===c)).filter(Boolean);
+  }
+
+  // keep state layer consistent with current tab
+  writeForm();
+  rebuildPreviews();
+  updateProposalPreview(item);
+}
+
+/* ====== MODULE BUILDER ====== */
+function renderModuleList(items){
+  const root = $("#moduleList");
+  root.innerHTML = "";
+
+  if(!items.length){
+    root.innerHTML = `<div class="hint" style="padding:12px 16px;">（完稿目前沒有可選項）</div>`;
+    return;
+  }
+
+  for(const it of items){
+    const id = it.id || "";
+    const checked = moduleSelectedIds.has(id);
+    const el = document.createElement("div");
+    el.className = "item";
+    el.innerHTML = `
+      <div class="itemMain">
+        <div class="itemTitle">${escapeHtml(it.title || "(未命名)")}</div>
+        <div class="itemMeta">ID：${escapeHtml(id)}｜形式：${escapeHtml(it.kind || it.type || "—")}｜時數：${escapeHtml(it.duration_min||"—")}</div>
+      </div>
+      <div class="itemActions">
+        <label class="pill ok" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" data-mid="${escapeAttr(id)}" ${checked ? "checked":""} />
+          選
+        </label>
+      </div>
+    `;
+    root.appendChild(el);
+  }
+
+  root.addEventListener("change", (e)=>{
+    const cb = e.target.closest("input[data-mid]");
+    if(!cb) return;
+    const id = cb.dataset.mid;
+    if(cb.checked) moduleSelectedIds.add(id); else moduleSelectedIds.delete(id);
+  }, { once:true });
+}
+
+/* ====== UI / EVENTS ====== */
+function setState(next){
+  state = next;
+  $$(".segBtn").forEach(b=>b.classList.toggle("active", b.dataset.state===state));
+  sheetHint.textContent = `存到：${STATE_SHEET[state]}`;
+  toast(`切換：${STATE_LABEL[state]}`);
+  reloadCurrentState().catch(err=>toast(`同步失敗：${err.message||err}`));
+}
+
+async function reloadCurrentState(){
+  const q = $("#q").value.trim();
+  const items = await apiList(state, { q });
+  listCache[state] = items;
+  renderList(items);
+}
+
+function openSheet(id){
+  const el = document.getElementById(id);
+  el.classList.add("show");
+  el.setAttribute("aria-hidden","false");
+}
+function closeSheet(id){
+  const el = document.getElementById(id);
+  el.classList.remove("show");
+  el.setAttribute("aria-hidden","true");
+}
+
+/* ====== TOOL PICKER ====== */
+function fillToolFilters(){
+  const cats = Array.from(new Set(toolsAll.map(t=>t.category).filter(Boolean))).sort();
+  const sel = $("#tool_cat");
+  sel.innerHTML = `<option value="">全部分類</option>` + cats.map(c=>`<option value="${escapeAttr(c)}">${escapeHtml(c)}</option>`).join("");
+}
+
+function renderToolLists(){
+  const q = $("#tool_q").value.trim().toLowerCase();
+  const cat = $("#tool_cat").value.trim();
+  const prefix = $("#tool_prefix").value.trim();
+
+  const filter = (t)=>{
+    if(t.status && t.status !== "active") return false;
+    if(cat && t.category !== cat) return false;
+    if(prefix && !String(t.toolCode||"").startsWith(prefix)) return false;
+    if(!q) return true;
+    const hay = `${t.toolCode} ${t.name} ${t.category} ${t.core} ${t.pain_points}`.toLowerCase();
+    return hay.includes(q);
+  };
+
+  const list = toolsAll.filter(filter).slice(0, 300);
+
+  const mainRoot = $("#toolMainList");
+  const subRoot = $("#toolSubList");
+  mainRoot.innerHTML = "";
+  subRoot.innerHTML = "";
+
+  for(const t of list){
+    const mainChecked = pickedMainTool && pickedMainTool.toolCode === t.toolCode;
+    const subChecked = pickedSubTools.some(x=>x.toolCode===t.toolCode);
+
+    const mainEl = document.createElement("div");
+    mainEl.className = "item";
+    mainEl.innerHTML = `
+      <div class="itemMain">
+        <div class="itemTitle">${escapeHtml(t.toolCode)}｜${escapeHtml(t.name)}</div>
+        <div class="itemMeta">${escapeHtml(t.category || "")}</div>
+      </div>
+      <div class="itemActions">
+        <label class="pill ok" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="radio" name="mainTool" data-main="${escapeAttr(t.toolCode)}" ${mainChecked?"checked":""}/>
+          主
+        </label>
+      </div>
+    `;
+    mainRoot.appendChild(mainEl);
+
+    const subEl = document.createElement("div");
+    subEl.className = "item";
+    subEl.innerHTML = `
+      <div class="itemMain">
+        <div class="itemTitle">${escapeHtml(t.toolCode)}｜${escapeHtml(t.name)}</div>
+        <div class="itemMeta">${escapeHtml(t.category || "")}</div>
+      </div>
+      <div class="itemActions">
+        <label class="pill" style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+          <input type="checkbox" data-sub="${escapeAttr(t.toolCode)}" ${subChecked?"checked":""}/>
+          副
+        </label>
+      </div>
+    `;
+    subRoot.appendChild(subEl);
+  }
+
+  // bind events
+  mainRoot.addEventListener("change", (e)=>{
+    const r = e.target.closest("input[data-main]");
+    if(!r) return;
+    const code = r.dataset.main;
+    pickedMainTool = toolsAll.find(t=>t.toolCode===code) || null;
+    // if main tool exists in sub, remove it
+    pickedSubTools = pickedSubTools.filter(t=>t.toolCode !== code);
+    $("#toolsStatusLine").textContent = `主工具：${pickedMainTool ? pickedMainTool.toolCode+"｜"+pickedMainTool.name : "未選"}`;
+  }, { once:true });
+
+  subRoot.addEventListener("change", (e)=>{
+    const cb = e.target.closest("input[data-sub]");
+    if(!cb) return;
+    const code = cb.dataset.sub;
+    if(pickedMainTool && pickedMainTool.toolCode === code){
+      cb.checked = false;
+      return;
+    }
+    const tool = toolsAll.find(t=>t.toolCode===code);
+    if(!tool) return;
+    if(cb.checked){
+      if(!pickedSubTools.some(x=>x.toolCode===code)) pickedSubTools.push(tool);
+    }else{
+      pickedSubTools = pickedSubTools.filter(x=>x.toolCode!==code);
+    }
+    $("#toolsStatusLine").textContent = `副工具：${pickedSubTools.length} 個`;
+  }, { once:true });
+}
+
+/* ====== PROPOSAL ====== */
+function updateProposalPreview(item = readForm()){
+  const kindText = item.kind === "其他" ? `其他：${item.kind_other || "（未填）"}` : item.kind;
+  const lines = [
+    `【提案名稱】${item.title || "（未填）"}`,
+    `【形式】${kindText}`,
+    `【時數】單堂：${item.duration_min || "（未填）"}｜總：${item.total_duration || "（未填）"}`,
+    `【人數】${item.capacity || "（未填）"}`,
+    `【地點】${item.location || "（未填）"}（${item.venue_type || "（未填）"}）`,
+    `【核心概念】${item.core_concept || "（未填）"}`,
+    `【工具書】主：${item.main_tool || "（未選）"}｜副：${item.sub_tools || "（未選）"}`,
+    ``,
+    `【簡述】`,
+    item.summary || "（未填）"
+  ];
+  $("#proposalPreview").value = lines.join("\n");
+}
+
+/* ====== COPY HELPERS ====== */
+async function copyText(text){
+  try{
+    await navigator.clipboard.writeText(text);
+    return true;
+  }catch(e){
+    // fallback
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(ta);
+    return ok;
+  }
+}
+
+/* ====== SANITIZE ====== */
+function escapeHtml(s){
+  return String(s||"").replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+function escapeAttr(s){ return escapeHtml(s).replace(/"/g,"&quot;"); }
+
+/* ====== INIT ====== */
+async function init(){
+  // Register SW
+  if("serviceWorker" in navigator){
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  }
+
+  // Bind status tabs
+  $$(".segBtn").forEach(btn=>{
+    btn.addEventListener("click", ()=>setState(btn.dataset.state));
+  });
+
+  // Bind editor changes -> rebuild previews
+  ["#f_title","#f_id","#f_kind","#f_kind_other","#f_duration_min","#f_total_duration","#f_capacity","#f_location","#f_venue_type","#f_core_concept","#f_summary"]
+    .forEach(sel=>$(sel).addEventListener("input", ()=>rebuildPreviews()));
+  $("#f_kind").addEventListener("change", ()=>rebuildPreviews());
+
+  $("#btnNew").addEventListener("click", ()=>{
+    clearForm();
+    toast("已新增空白稿");
+  });
+
+  $("#btnSave").addEventListener("click", async ()=>{
+    try{
+      const item = readForm();
+
+      // enforce tool requirement
+      if(!pickedMainTool){
+        alert("提醒：每一個活動都要搭配工具書。\n請先選一個「主工具」。");
+        return;
+      }
+
+      // map extra fields onto item for API storage
+      item.kind = item.kind;
+      item.kind_other = item.kind_other;
+      item.total_duration = item.total_duration;
+      item.location = item.location;
+      item.venue_type = item.venue_type;
+      item.core_concept = item.core_concept;
+      item.main_tool = item.main_tool;
+      item.sub_tools = item.sub_tools;
+      item.tool_uids = item.tool_uids;
+
+      const res = await apiUpsert(state, item);
+      const saved = res.item || item;
+      current = Object.assign({}, saved);
+      $("#f_id").value = saved.id || item.id || "";
+      toast(`已存回：${STATE_SHEET[state]}（${res.action || "ok"}）`);
+      await reloadCurrentState();
+    }catch(err){
+      toast(`存檔失敗：${err.message || err}`);
+      alert("存檔失敗：\n\n1) 請確認 GAS 部署：Execute as=Me、Who has access=Anyone\n2) 若你是用 Chrome/Edge：關閉「封鎖第三方 Cookie」或改用「無痕視窗」測試\n3) 也可能是 API 回傳格式不同（請貼回我看）\n\n錯誤："+(err.message||err));
+    }
+  });
+
+  $("#btnReload").addEventListener("click", ()=>reloadCurrentState().catch(err=>toast(err.message||err)));
+  $("#btnSearch").addEventListener("click", ()=>reloadCurrentState().catch(err=>toast(err.message||err)));
+  $("#q").addEventListener("keydown", (e)=>{ if(e.key==="Enter") $("#btnSearch").click(); });
+
+  // AI copy
+  $("#btnCopyAI").addEventListener("click", async ()=>{
+    const ok = await copyText($("#aiPreview").value);
+    toast(ok ? "已複製 AI 指令" : "複製失敗");
+  });
+
+  $("#btnCopyTSV").addEventListener("click", async ()=>{
+    const ok = await copyText($("#tsvPreview").value);
+    toast(ok ? "已複製 TSV 一列" : "複製失敗");
+  });
+
+  $("#btnCopyProposal").addEventListener("click", async ()=>{
+    const ok = await copyText($("#proposalPreview").value);
+    toast(ok ? "已複製提案摘要" : "複製失敗");
+  });
+
+  // Settings
+  $("#btnSettings").addEventListener("click", ()=>{
+    const s = readSettings();
+    $("#apiCourse").value = s.courseApi;
+    $("#apiTools").value = s.toolsApi;
+    openSheet("settings");
+  });
+  $("#btnCloseSettings").addEventListener("click", ()=>closeSheet("settings"));
+  $("#btnSaveSettings").addEventListener("click", ()=>{
+    saveSettings({ courseApi: $("#apiCourse").value.trim(), toolsApi: $("#apiTools").value.trim() });
+    toast("設定已儲存");
+    closeSheet("settings");
+  });
+  $("#btnTestApi").addEventListener("click", async ()=>{
+    try{
+      const course = $("#apiCourse").value.trim();
+      const tools = $("#apiTools").value.trim();
+      const a = await apiPing(course);
+      const b = await fetch(tools).then(r=>r.json());
+      $("#apiTestLine").textContent = `課程API：${a.ok?"OK":"FAIL"}｜工具API：${b.ok?"OK":"FAIL"}`;
+    }catch(err){
+      $("#apiTestLine").textContent = `測試失敗：${err.message||err}`;
+    }
+  });
+
+  // Tool Picker
+  $("#btnPickTools").addEventListener("click", async ()=>{
+    try{
+      if(!toolsAll.length){
+        toast("載入工具庫中…");
+        await toolsFetchAll();
+        fillToolFilters();
+      }
+      renderToolLists();
+      openSheet("toolPicker");
+      $("#toolsStatusLine").textContent = "請選主工具（必選），副工具可複選。";
+    }catch(err){
+      toast("工具庫讀取失敗："+(err.message||err));
+      alert("工具庫讀取失敗。\n\n請確認你提供的工具API可直接在瀏覽器開啟看到 JSON。\n錯誤："+(err.message||err));
+    }
+  });
+  $("#btnCloseTools").addEventListener("click", ()=>closeSheet("toolPicker"));
+  $("#btnToolSearch").addEventListener("click", ()=>renderToolLists());
+  ["#tool_q","#tool_cat","#tool_prefix"].forEach(sel=>{
+    $(sel).addEventListener("change", ()=>renderToolLists());
+    $(sel).addEventListener("input", ()=>renderToolLists());
+  });
+
+  $("#btnApplyTools").addEventListener("click", ()=>{
+    renderPickedTools();
+    rebuildPreviews();
+    updateProposalPreview();
+    closeSheet("toolPicker");
+    toast("已套用工具勾選");
+  });
+
+  // Module builder
+  $("#btnModuleSync").addEventListener("click", async ()=>{
+    try{
+      toast("載入完稿清單中…");
+      const items = await apiList("final", { q: $("#m_q").value.trim() });
+      // only single items (not module)
+      moduleCandidates = items.filter(it => (it.type || "") !== "module");
+      renderModuleList(moduleCandidates);
+      toast(`完稿載入：${moduleCandidates.length} 筆`);
+    }catch(err){
+      toast("載入完稿失敗："+(err.message||err));
+    }
+  });
+
+  $("#btnModuleFilter").addEventListener("click", ()=>{
+    const q = $("#m_q").value.trim().toLowerCase();
+    const filtered = !q ? moduleCandidates : moduleCandidates.filter(it=>{
+      const hay = `${it.id||""} ${it.title||""} ${it.tags||""} ${it.summary||""}`.toLowerCase();
+      return hay.includes(q);
+    });
+    renderModuleList(filtered);
+  });
+
+  $("#btnBuildModule").addEventListener("click", async ()=>{
+    try{
+      if(moduleSelectedIds.size < 2){
+        alert("請至少勾選 2 個單場完稿，才有模組的意義。");
+        return;
+      }
+      const title = $("#m_title").value.trim();
+      if(!title){
+        alert("請先填「模組主題」。");
+        return;
+      }
+
+      const selected = moduleCandidates.filter(x=>moduleSelectedIds.has(x.id));
+      const toolLinks = [];
+      const toolCodes = new Set();
+
+      selected.forEach(it=>{
+        // merge links
+        String(it.links||"").split(/\s+/).forEach(u=>u && toolLinks.push(u));
+        // tags may include tool codes; also parse main_tool/sub_tools
+        if(it.main_tool) toolCodes.add(String(it.main_tool).split("｜")[0].trim());
+        if(it.sub_tools){
+          String(it.sub_tools).split(/；|,|，/).forEach(s=>{
+            const c = s.split("｜")[0].trim();
+            if(c) toolCodes.add(c);
+          });
+        }
+      });
+
+      // build module item
+      const moduleItem = {
+        title,
+        kind: "模組課程",
+        kind_other: "",
+        type: "module",
+        status: "final",
+        duration_min: "", // can be blank; you filled total
+        total_duration: $("#m_total_duration").value.trim(),
+        capacity: "", // optional
+        location: "",
+        venue_type: "皆可",
+        core_concept: "",
+        summary: `模組課程（由 ${selected.length} 個單場完稿組合）`,
+        module_items: selected.map(x=>`${x.id}｜${x.title}`).join("\n"),
+        notes: `【組合清單】\n`+selected.map((x,i)=>`${String(i+1).padStart(2,"0")} ${x.id}｜${x.title}`).join("\n"),
+        links: Array.from(new Set(toolLinks)).join("\n"),
+        tags: Array.from(toolCodes).join(" "),
+        main_tool: "",  // module may pick later; keep empty
+        sub_tools: "",
+        tool_uids: "",
+      };
+
+      // allow save even if module has no main tool yet (but still remind)
+      const ok = confirm("要把這個模組直接存入「完稿」嗎？\n（之後仍可載入再補主工具）");
+      if(!ok) return;
+
+      const res = await apiUpsert("final", moduleItem);
+      toast("模組已存入完稿："+(res.id || res.item?.id || ""));
+      moduleSelectedIds.clear();
+      $("#m_title").value = "";
+      await reloadCurrentState();
+    }catch(err){
+      toast("建立模組失敗："+(err.message||err));
+      alert("建立模組失敗："+(err.message||err));
+    }
+  });
+
+  // initial tool load (lazy) and default tab
+  clearForm();
+  setState("idea");
+  rebuildPreviews();
+}
+
+init();
