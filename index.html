@@ -1,178 +1,272 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <meta name="theme-color" content="#0f3d2e" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <title>Angel｜課程編輯工作台</title>
-  <meta name="description" content="幸福教養｜課程編輯＋存取後臺（發想/草稿/完稿）" />
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="icon" href="./icons/icon-192.png" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-  <link rel="stylesheet" href="./styles.css" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Angel｜課程管理工房</title>
+  <meta name="theme-color" content="#165a4a" />
+  <meta name="description" content="幸福教養｜課程設計工作台：發想/草稿/完稿分流，工具庫勾選，文稿存取，單場完稿可組合成模組課程。" />
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="assets/icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="assets/icons/icon-192.png" />
+
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <div class="logoDot" aria-hidden="true"></div>
-      <div class="titles">
-        <div class="kicker">幸福教養</div>
-        <div class="h1">課程編輯工作台</div>
-      </div>
+      <div class="brandTitle">Angel｜課程管理工房</div>
+      <div class="brandSub">幸福教養綠｜發想→草稿→完稿（完稿可組模組課程）</div>
     </div>
-
-    <div class="statusPills" role="tablist" aria-label="狀態">
-      <button class="pill" data-state="idea" role="tab" aria-selected="true">發想</button>
-      <button class="pill" data-state="draft" role="tab" aria-selected="false">草稿</button>
-      <button class="pill" data-state="final" role="tab" aria-selected="false">完稿</button>
+    <div class="topActions">
+      <button class="btn" id="tools-refresh" type="button">同步工具庫</button>
     </div>
   </header>
 
-  <main class="wrap">
-    <section class="card">
-      <div class="cardHead">
-        <div>
-          <div class="cardTitle">直接編輯</div>
-          <div class="cardSub">進來就能寫。存檔會依「發想/草稿/完稿」自動存回後臺分頁。</div>
+  <nav class="tabs">
+    <button class="tab" data-tab="idea" aria-selected="true">發想</button>
+    <button class="tab" data-tab="draft" aria-selected="false">草稿</button>
+    <button class="tab" data-tab="final" aria-selected="false">完稿</button>
+  </nav>
+
+  <main class="layout">
+    <!-- LEFT: lists -->
+    <section class="panels">
+      <section class="panel active" id="panel-idea">
+        <div class="card">
+          <div class="cardTitle">發想清單</div>
+          <div class="row">
+            <input id="search-idea" class="input" placeholder="搜尋（課名/標籤/摘要）" />
+            <button id="refresh-idea" class="btn" type="button">同步</button>
+            <button id="new-idea" class="btn pri" type="button">新增</button>
+          </div>
+          <div id="list-idea" class="list"></div>
         </div>
-        <div class="mini">
-          <span class="chip" id="chipState">發想</span>
-          <span class="chip" id="chipId">未存檔</span>
+      </section>
+
+      <section class="panel" id="panel-draft">
+        <div class="card">
+          <div class="cardTitle">草稿清單</div>
+          <div class="row">
+            <input id="search-draft" class="input" placeholder="搜尋（課名/標籤/摘要）" />
+            <button id="refresh-draft" class="btn" type="button">同步</button>
+            <button id="new-draft" class="btn pri" type="button">新增</button>
+          </div>
+          <div id="list-draft" class="list"></div>
         </div>
-      </div>
+      </section>
 
-      <div class="grid">
-        <label class="field">
-          <span>課程名稱</span>
-          <input id="title" type="text" placeholder="例如：幸福教養體驗活動：從情緒急救到關係修復" />
-        </label>
+      <section class="panel" id="panel-final">
+        <div class="card">
+          <div class="row" style="align-items:center; justify-content:space-between; gap:10px;">
+            <div>
+              <div class="cardTitle">完稿清單</div>
+              <div class="cardHint">提示：勾選多筆「單場完稿」→ 右側可一鍵組成模組課程（存入完稿）</div>
+            </div>
+            <div id="module-bar" class="moduleBar">
+              <span class="pill">已選 <b id="module-count">0</b> 筆</span>
+              <button id="module-create" class="btn pri" type="button">組合成模組課程</button>
+            </div>
+          </div>
 
-        <label class="field">
-          <span>形式（下拉）</span>
-          <select id="kind">
-            <option value="演講">演講</option>
-            <option value="模組課程">模組課程</option>
-            <option value="單場課程">單場課程</option>
-            <option value="單場活動">單場活動</option>
-            <option value="其他">其他（手動輸入）</option>
-          </select>
-        </label>
-
-        <label class="field" id="kindOtherWrap" style="display:none">
-          <span>其他（請寫）</span>
-          <input id="kind_other" type="text" placeholder="例如：工作坊/讀書會/陪跑計畫…" />
-        </label>
-
-        <label class="field">
-          <span>對象</span>
-          <input id="audience" type="text" placeholder="例如：親子/家長/老師/企業…" />
-        </label>
-
-        <label class="field">
-          <span>關鍵痛點 / 標籤</span>
-          <input id="tags" type="text" placeholder="#腦袋停不下來 #親子卡住 #溝通斷線…" />
-        </label>
-
-        <label class="field">
-          <span>堂數/集數（模組用）</span>
-          <input id="module_sessions" type="text" placeholder="例如：8（可留白）" />
-        </label>
-
-        <label class="field">
-          <span>每堂時間（分鐘/文字）</span>
-          <input id="session_minutes" type="text" placeholder="例如：90 / 120 / 90-120" />
-        </label>
-
-        <label class="field">
-          <span>單場時長（分鐘/文字）</span>
-          <input id="single_duration" type="text" placeholder="例如：60 / 90 / 120" />
-        </label>
-
-        <label class="field">
-          <span>人數（可空）</span>
-          <input id="capacity" type="text" placeholder="例如：20" />
-        </label>
-
-        <label class="field">
-          <span>版本（可空）</span>
-          <input id="version" type="text" placeholder="例如：v1.0" />
-        </label>
-      </div>
-
-      <div class="stack">
-        <label class="field">
-          <span>對外摘要（summary）</span>
-          <textarea id="summary" rows="3" placeholder="對外一段話：這堂課/活動要帶走什麼？"></textarea>
-        </label>
-
-        <label class="field">
-          <span>目標（objectives，條列也行）</span>
-          <textarea id="objectives" rows="3" placeholder="例如：1) 大人先穩定 2) 孩子情緒急救 3) 關係修復…"></textarea>
-        </label>
-
-        <label class="field">
-          <span>流程/大綱（outline）</span>
-          <textarea id="outline" rows="5" placeholder="例如：開場→五感覺察→反應選擇→OK蹦修復…"></textarea>
-        </label>
-
-        <label class="field">
-          <span>教材/作業（materials）</span>
-          <textarea id="materials" rows="4" placeholder="例如：練習單、回家任務、結業小抄…"></textarea>
-        </label>
-
-        <label class="field">
-          <span>連結（links）</span>
-          <textarea id="links" rows="3" placeholder="可貼工具連結/影片連結，多行也可以"></textarea>
-        </label>
-
-        <label class="field">
-          <span>文稿（script/notes）</span>
-          <textarea id="notes" rows="6" placeholder="講稿/口播/主持稿/課程講義都可以放這裡（會一起存回後臺）"></textarea>
-        </label>
-      </div>
-
-      <div class="actions">
-        <button class="btn ghost" id="btnNew">新文件</button>
-        <button class="btn ghost" id="btnLoad">載入（用 ID）</button>
-        <button class="btn" id="btnSave">存回後臺</button>
-        <button class="btn danger" id="btnDelete" disabled>刪除（後臺）</button>
-      </div>
-
-      <div class="helper">
-        <div class="row">
-          <div class="muted">自動草稿（本機）</div>
-          <button class="linkBtn" id="btnLocalSave">存本機</button>
-          <button class="linkBtn" id="btnLocalLoad">載入本機</button>
-          <button class="linkBtn" id="btnExport">匯出 JSON</button>
+          <div class="row">
+            <input id="search-final" class="input" placeholder="搜尋（課名/標籤/摘要）" />
+            <button id="refresh-final" class="btn" type="button">同步</button>
+            <button id="new-final" class="btn pri" type="button">新增</button>
+          </div>
+          <div id="list-final" class="list"></div>
         </div>
-        <div class="row">
-          <div class="muted">後臺狀態</div>
-          <div id="apiStatus" class="mono">尚未連線</div>
-        </div>
-      </div>
+      </section>
     </section>
 
-    <section class="card small">
-      <div class="cardHead">
-        <div>
-          <div class="cardTitle">快速說明</div>
-          <div class="cardSub">你要的「直接編輯＋存取後臺」在這裡：不用清單也能工作。</div>
+    <!-- RIGHT: editor + tools -->
+    <aside class="editorPane">
+      <div class="card">
+        <div class="row" style="align-items:center; justify-content:space-between;">
+          <div>
+            <div class="cardTitle">編輯區</div>
+            <div class="cardHint">點左側清單項目即可載入編輯；儲存會寫回對應分頁（發想/草稿/幸福教養課程管理）。</div>
+          </div>
+          <span id="editor-state" class="badge">發想</span>
+        </div>
+
+        <div class="grid2">
+          <label class="field">
+            <span>ID</span>
+            <input id="f-id" class="input" placeholder="(可留空，系統會自動產生)" />
+          </label>
+          <label class="field">
+            <span>課名</span>
+            <input id="f-title" class="input" placeholder="例如：大人先穩定｜現場急救30秒" />
+          </label>
+
+          <label class="field">
+            <span>類型 type</span>
+            <select id="f-type" class="input">
+              <option value="course">course（課程）</option>
+              <option value="talk">talk（演講）</option>
+              <option value="single_class">single_class（單場課程）</option>
+              <option value="single_event">single_event（單場活動）</option>
+              <option value="other">other（其他）</option>
+            </select>
+          </label>
+
+          <label class="field">
+            <span>形式 kind</span>
+            <select id="f-kind" class="input">
+              <option value="演講">演講</option>
+              <option value="模組課程">模組課程</option>
+              <option value="單場課程">單場課程</option>
+              <option value="單場活動">單場活動</option>
+              <option value="其他">其他（手動）</option>
+            </select>
+          </label>
+
+          <label class="field hide" id="kindOtherWrap">
+            <span>其他（自填）</span>
+            <input id="f-kind-other" class="input" placeholder="請輸入其他形式" />
+          </label>
+
+          <label class="field">
+            <span>對象</span>
+            <input id="f-audience" class="input" placeholder="例如：親子／家長／教師" />
+          </label>
+
+          <label class="field">
+            <span>時間/節律（可用文字）</span>
+            <input id="f-duration" class="input" placeholder="例如：單場 90 分鐘 / 模組 8 堂×90 分鐘" />
+          </label>
+
+          <label class="field">
+            <span>標籤 tags</span>
+            <input id="f-tags" class="input" placeholder="#情緒急救 #反應太快 ..." />
+          </label>
+
+          <label class="field">
+            <span>狀態 status</span>
+            <select id="f-status" class="input">
+              <option value="idea">idea</option>
+              <option value="draft">draft</option>
+              <option value="ready">ready（完稿預設）</option>
+              <option value="active">active</option>
+              <option value="archived">archived</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>摘要 summary</span>
+          <textarea id="f-summary" class="textarea" rows="3" placeholder="對外／對內簡介"></textarea>
+        </label>
+
+        <label class="field">
+          <span>大綱 outline（可用換行）</span>
+          <textarea id="f-outline" class="textarea" rows="6" placeholder="可貼入：流程/每堂/每段"></textarea>
+        </label>
+
+        <label class="field">
+          <span>連結 links（工具連結或資料）</span>
+          <textarea id="f-links" class="textarea" rows="3" placeholder="一行一個連結，或用空白分隔"></textarea>
+        </label>
+
+        <label class="field">
+          <span>文稿 scripts（口播/講稿/逐頁稿，可貼入）</span>
+          <textarea id="f-script" class="textarea" rows="6" placeholder="（會自動清理多餘換行，方便貼到表格）"></textarea>
+        </label>
+
+        <label class="field">
+          <span>已選工具（自動生成）</span>
+          <textarea id="f-tools-used" class="textarea" rows="2" placeholder="主工具/副工具（由右側工具庫勾選產生）" readonly></textarea>
+        </label>
+
+        <div class="row" style="flex-wrap:wrap; gap:10px;">
+          <button id="save" class="btn pri" type="button">儲存到後臺</button>
+          <button id="delete" class="btn danger" type="button">刪除</button>
+          <button id="clear" class="btn" type="button">清空編輯區</button>
+
+          <span class="sep"></span>
+
+          <button id="local-save" class="btn" type="button">存本機草稿</button>
+          <button id="local-load" class="btn" type="button">讀本機草稿</button>
+          <button id="local-clear" class="btn" type="button">清本機</button>
         </div>
       </div>
-      <ol class="steps">
-        <li>選狀態：發想/草稿/完稿（決定存到哪個分頁）。</li>
-        <li>直接寫內容 → 按「存回後臺」。第一次存會自動產生 ID，之後就是更新同一筆。</li>
-        <li>要改不同筆：用「載入（用 ID）」把後臺那筆拉回來繼續改。</li>
-      </ol>
-    </section>
+      <div class="card hide" id="proposal-card">
+        <div class="row" style="align-items:center; justify-content:space-between;">
+          <div>
+            <div class="cardTitle">提案工具（完稿專用）</div>
+            <div class="cardHint">不寫回後臺；用完可放下。這裡只負責把你「完稿內容」整理成對外可用的提案。</div>
+          </div>
+          <span class="pill">一鍵複製</span>
+        </div>
+
+        <div class="row" style="flex-wrap:wrap; gap:10px; margin-top:10px;">
+          <button id="copy-proposal" class="btn pri" type="button">複製｜對外提案文案</button>
+          <button id="copy-ppt" class="btn" type="button">複製｜PPT 大綱</button>
+          <button id="copy-ai-proposal" class="btn" type="button">複製｜AI 提案指令</button>
+        </div>
+
+        <label class="field" style="margin-top:10px;">
+          <span>預覽（可直接複製／也可自己微調）</span>
+          <textarea id="proposal-preview" class="textarea" rows="10" readonly></textarea>
+        </label>
+      </div>
+
+      <div class="card">
+        <div class="row" style="align-items:center; justify-content:space-between;">
+          <div>
+            <div class="cardTitle">工具庫（勾選）</div>
+            <div class="cardHint">此區只用來「列出/勾選」；工具庫存請在試算表手動維護。</div>
+          </div>
+        </div>
+        <div class="row">
+          <input id="tools-filter" class="input" placeholder="搜尋工具（toolCode/name/tags/category）" />
+        </div>
+        <div id="tools-list" class="list"></div>
+      </div>
+    </aside>
   </main>
 
-  <footer class="footer">
-    <span>Angel｜把心站穩，活得自在。</span>
-  </footer>
+  <!-- Module builder modal -->
+  <div id="modal" class="modal hide" role="dialog" aria-modal="true">
+    <div class="modalCard">
+      <div class="modalTitle">組合成模組課程（存入完稿）</div>
+      <div class="cardHint">會把你勾選的多筆「單場完稿」整理成一筆新的「模組課程」完稿；原本單場完稿不會被刪除。</div>
 
-  <script src="./app.js"></script>
+      <label class="field">
+        <span>模組課名</span>
+        <input id="m-title" class="input" placeholder="例如：幸福教養｜情緒急救到關係修復（系列）" />
+      </label>
+
+      <div class="grid2">
+        <label class="field">
+          <span>形式 kind</span>
+          <select id="m-kind" class="input">
+            <option value="模組課程">模組課程</option>
+            <option value="模組活動">模組活動</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>總分鐘數（可留空）</span>
+          <input id="m-minutes" class="input" placeholder="例如：480" />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>備註</span>
+        <textarea id="m-note" class="textarea" rows="3" placeholder="例如：由多場完稿組合，適合對外提案"></textarea>
+      </label>
+
+      <div class="row" style="justify-content:flex-end; gap:10px;">
+        <button id="m-cancel" class="btn" type="button">取消</button>
+        <button id="m-create" class="btn pri" type="button">建立模組完稿</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hide"></div>
+
+  <script src="app.js"></script>
 </body>
 </html>
