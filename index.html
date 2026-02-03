@@ -1,159 +1,253 @@
-<!doctype html><html lang="zh-Hant"><head>
-<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
-<title>幸福教養課程管理</title>
-<meta name="theme-color" content="#1f3a2e"/>
-<link rel="manifest" href="./manifest.json"/>
-<link rel="icon" href="./icons/icon-192.png"/>
-<link rel="apple-touch-icon" href="./icons/icon-192.png"/>
-<link rel="stylesheet" href="./styles.css"/>
-</head><body>
-<header class="topbar">
-  <div class="brand">
-    <span class="dot"></span>
-    <div>
-      <div class="title">幸福教養課程管理</div>
-      <div class="sub">工具庫存 × 課程管理 × 模組組合</div>
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Angel｜課程管理工房</title>
+  <meta name="theme-color" content="#133a2a" />
+  <meta name="description" content="Angel Course Manager Workbench｜發想/草稿/完稿課程管理＋工具庫存勾選＋單場完稿組模組" />
+
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="icon" href="./icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
+
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">ANGEL</div>
+      <div class="meta">
+        <div class="title">課程管理工房</div>
+        <div class="subtitle">發想 / 草稿 / 完稿｜工具勾選｜單場完稿 → 模組課程</div>
+      </div>
     </div>
-  </div>
-  <button id="btn-install" class="btn ghost" hidden>一鍵安裝</button>
-</header>
-
-<main class="wrap">
-  <section class="card">
-    <div class="row between">
-      <div class="tabs">
-        <button class="tabbtn on" data-tab="tools">工具庫存</button>
-        <button class="tabbtn" data-tab="courses">課程管理</button>
-        <button class="tabbtn" data-tab="scripts">文稿存取</button>
-        <button class="tabbtn" data-tab="builder">模組組合</button>
-        <button class="tabbtn" data-tab="api">API 測試</button>
-      </div>
-      <button id="btn-refresh" class="btn">重新抓取</button>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost" id="btn-install" hidden>安裝</button>
+      <button class="btn" id="btn-refresh">刷新</button>
     </div>
+  </header>
 
-    <div class="hr"></div>
-
-    <section id="tools" class="tab on">
-      <div class="row gap">
-        <input id="tools-q" class="input" placeholder="搜尋工具（名稱/ID/分類/標籤）"/>
-        <select id="tools-cat" class="select"><option value="">全部分類</option></select>
+  <main class="container">
+    <section class="card">
+      <div class="card-hd">
+        <div>
+          <h2>快速操作</h2>
+          <p class="muted">先把需要的按鈕放在手邊：同步、備份、文稿、組模組。</p>
+        </div>
+        <div class="pill">Wizard</div>
       </div>
-      <div class="hint">資料來源：工具庫存管理 API（取代 data/tools.csv）</div>
-      <div id="tools-list" class="list"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <h3>後臺同步</h3>
+          <div class="row">
+            <button class="btn" id="btn-sync-push">同步到後臺（本狀態）</button>
+            <button class="btn btn-ghost" id="btn-sync-pull">從後臺抓（本狀態清單）</button>
+          </div>
+          <div class="row">
+            <div class="muted small">API 連線狀態：<span id="api-status">—</span></div>
+          </div>
+          <pre class="code" id="api-last">（尚無）</pre>
+        </div>
+
+        <div class="panel">
+          <h3>本機草稿（localStorage）</h3>
+          <div class="row">
+            <button class="btn" id="btn-local-save">存本機草稿</button>
+            <button class="btn btn-ghost" id="btn-local-load">叫出本機草稿</button>
+            <button class="btn btn-ghost" id="btn-local-clear">清空本機草稿</button>
+          </div>
+          <div class="row">
+            <button class="btn btn-ghost" id="btn-export-json">匯出 JSON</button>
+            <button class="btn btn-ghost" id="btn-copy-tsv">一鍵複製｜TSV 一列</button>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <section id="courses" class="tab">
-      <div class="row gap">
-        <select id="course-state" class="select">
-          <option value="final">完稿</option><option value="draft">草稿</option><option value="idea">發想</option>
-        </select>
-        <input id="course-q" class="input" placeholder="搜尋課程（標題/ID/標籤/摘要）"/>
-        <select id="course-status" class="select">
-          <option value="">全部狀態</option><option value="ready">ready</option><option value="draft">draft</option>
-          <option value="idea">idea</option><option value="archived">archived</option>
-        </select>
+    <section class="card">
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="idea" role="tab">發想</button>
+        <button class="tab" data-tab="draft" role="tab">草稿</button>
+        <button class="tab" data-tab="final" role="tab">完稿</button>
+        <button class="tab" data-tab="tools" role="tab">工具庫存</button>
       </div>
-      <div class="hint">檢視三分頁資料（發想/草稿/完稿）。</div>
-      <div id="courses-list" class="list"></div>
+
+      <!-- IDEA -->
+      <section class="tabpage active" id="tab-idea">
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="side-hd">
+              <div class="state-title">發想清單</div>
+              <div class="side-actions">
+                <input class="input" id="q-idea" placeholder="搜尋（標題/標籤/摘要）" />
+                <button class="btn btn-ghost" data-action="reload" data-state="idea">更新</button>
+              </div>
+            </div>
+            <div class="list" id="list-idea"></div>
+          </aside>
+
+          <section class="editor">
+            <div class="editor-hd">
+              <div>
+                <h3>編輯｜發想</h3>
+                <p class="muted small">沒填 id 也可以，系統會自動生一個。</p>
+              </div>
+              <div class="editor-actions">
+                <button class="btn btn-ghost" data-action="new" data-state="idea">新增</button>
+                <button class="btn" data-action="save" data-state="idea">存到後臺</button>
+              </div>
+            </div>
+            <div class="form" data-form="idea"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- DRAFT -->
+      <section class="tabpage" id="tab-draft">
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="side-hd">
+              <div class="state-title">草稿清單</div>
+              <div class="side-actions">
+                <input class="input" id="q-draft" placeholder="搜尋（標題/標籤/摘要）" />
+                <button class="btn btn-ghost" data-action="reload" data-state="draft">更新</button>
+              </div>
+            </div>
+            <div class="list" id="list-draft"></div>
+          </aside>
+
+          <section class="editor">
+            <div class="editor-hd">
+              <div>
+                <h3>編輯｜草稿</h3>
+                <p class="muted small">建議：草稿 id 仍可沿用發想 id（方便追蹤）。</p>
+              </div>
+              <div class="editor-actions">
+                <button class="btn btn-ghost" data-action="new" data-state="draft">新增</button>
+                <button class="btn" data-action="save" data-state="draft">存到後臺</button>
+              </div>
+            </div>
+            <div class="form" data-form="draft"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- FINAL -->
+      <section class="tabpage" id="tab-final">
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="side-hd">
+              <div class="state-title">完稿清單</div>
+              <div class="side-actions">
+                <input class="input" id="q-final" placeholder="搜尋（標題/標籤/摘要）" />
+                <button class="btn btn-ghost" data-action="reload" data-state="final">更新</button>
+              </div>
+            </div>
+            <div class="hint small muted">✅ 你可以勾選多個「單場完稿」，一鍵組成「模組課程」並存入完稿。</div>
+            <div class="list" id="list-final"></div>
+            <div class="sticky-bar">
+              <button class="btn" id="btn-make-module" disabled>組合成模組課程（存入完稿）</button>
+              <div class="small muted" id="module-selected">已選 0</div>
+            </div>
+          </aside>
+
+          <section class="editor">
+            <div class="editor-hd">
+              <div>
+                <h3>編輯｜完稿</h3>
+                <p class="muted small">完稿會存到「幸福教養課程管理」分頁。</p>
+              </div>
+              <div class="editor-actions">
+                <button class="btn btn-ghost" data-action="new" data-state="final">新增</button>
+                <button class="btn" data-action="save" data-state="final">存到後臺</button>
+              </div>
+            </div>
+            <div class="form" data-form="final"></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- TOOLS -->
+      <section class="tabpage" id="tab-tools">
+        <div class="workspace">
+          <aside class="sidebar">
+            <div class="side-hd">
+              <div class="state-title">工具庫存（後臺）</div>
+              <div class="side-actions">
+                <input class="input" id="q-tools" placeholder="搜尋（工具名稱/標籤）" />
+                <button class="btn btn-ghost" id="btn-tools-reload">更新</button>
+              </div>
+            </div>
+            <div class="hint small muted">工具庫存你手動維護在「工具庫存管理」分頁。這裡只負責列出並供你勾選。</div>
+            <div class="list" id="list-tools"></div>
+          </aside>
+
+          <section class="editor">
+            <div class="editor-hd">
+              <div>
+                <h3>已選工具</h3>
+                <p class="muted small">你在任一狀態的課程編輯器，都能一鍵帶入「tools_used」。</p>
+              </div>
+              <div class="editor-actions">
+                <button class="btn" id="btn-apply-tools">套用到目前課程（tools_used）</button>
+                <button class="btn btn-ghost" id="btn-clear-tools">清空選取</button>
+              </div>
+            </div>
+            <div class="panel">
+              <div class="chips" id="tools-chips"></div>
+              <div class="muted small" style="margin-top:10px;">提示：工具清單只是「勾選器」，資料仍以試算表為主。</div>
+            </div>
+          </section>
+        </div>
+      </section>
     </section>
+  </main>
 
-    
-    <section id="scripts" class="tab">
-      <div class="hint"><b>把課程的「PPT/講稿/口播/主持稿」集中在這裡編輯與存回後臺</b><br/>操作：在「課程管理」點「文稿」→ 會自動載入到這一頁。</div>
-
-      <div class="row gap">
-        <select id="script-state" class="select">
-          <option value="final">完稿</option><option value="draft">草稿</option><option value="idea">發想</option>
-        </select>
-        <input id="script-id" class="input" placeholder="課程 ID（可由清單一鍵帶入）"/>
-        <button id="btn-script-load" class="btn">載入</button>
-        <button id="btn-script-save" class="btn primary">存回後臺</button>
-        <button id="btn-script-local" class="btn ghost">存本機草稿</button>
+  <!-- Module Modal -->
+  <dialog class="modal" id="dlg-module">
+    <form method="dialog" class="modal-card">
+      <div class="modal-hd">
+        <h3>組合成模組課程</h3>
+        <button class="icon-btn" value="cancel" aria-label="close">✕</button>
       </div>
-
-      <div class="row gap">
-        <input id="script-title" class="input" placeholder="課程名稱（title）"/>
-        <input id="script-version" class="input" placeholder="版本（version，可空）"/>
+      <div class="modal-bd">
+        <label class="field">
+          <div class="label">模組名稱（title）</div>
+          <input class="input" id="module-title" placeholder="例如：情緒急救 × 120 分鐘親子體驗" required />
+        </label>
+        <div class="grid-2">
+          <label class="field">
+            <div class="label">kind</div>
+            <select class="input" id="module-kind">
+              <option value="模組課程">模組課程</option>
+              <option value="活動">活動</option>
+              <option value="演講">演講</option>
+              <option value="其他">其他</option>
+            </select>
+          </label>
+          <label class="field">
+            <div class="label">每堂時間（session_minutes）</div>
+            <input class="input" id="module-session-min" placeholder="例如：40 或 40-50" />
+          </label>
+        </div>
+        <label class="field">
+          <div class="label">備註</div>
+          <textarea class="input" id="module-notes" rows="3" placeholder="想提醒自己或助教的重點"></textarea>
+        </label>
+        <div class="panel" id="module-preview"></div>
       </div>
-
-      <div class="row gap">
-        <textarea id="script-ppt" class="textarea" rows="6" placeholder="PPT 大綱（ppt_outline）"></textarea>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" value="cancel">取消</button>
+        <button class="btn" id="btn-module-confirm" value="ok">建立並存入完稿</button>
       </div>
+    </form>
+  </dialog>
 
-      <div class="row gap">
-        <textarea id="script-page" class="textarea" rows="8" placeholder="逐頁講稿（page_script）"></textarea>
-      </div>
+  <div class="toast" id="toast" aria-live="polite"></div>
 
-      <div class="row gap">
-        <textarea id="script-voice" class="textarea" rows="8" placeholder="影音口播稿（voiceover_script）"></textarea>
-      </div>
-
-      <div class="row gap">
-        <textarea id="script-host" class="textarea" rows="8" placeholder="演說/主持稿（host_script）"></textarea>
-      </div>
-
-      <div class="row gap">
-        <textarea id="script-homework" class="textarea" rows="6" placeholder="教材/作業/練習（materials / homework）"></textarea>
-      </div>
-
-      <div class="row gap">
-        <button class="btn ghost copy" data-copy="#script-ppt">一鍵複製：PPT</button>
-        <button class="btn ghost copy" data-copy="#script-page">一鍵複製：逐頁講稿</button>
-        <button class="btn ghost copy" data-copy="#script-voice">一鍵複製：口播稿</button>
-        <button class="btn ghost copy" data-copy="#script-host">一鍵複製：主持稿</button>
-        <button class="btn ghost copy" data-copy="#script-homework">一鍵複製：教材/作業</button>
-      </div>
-
-      <div class="hint">貼給 AI 或貼回表單前，系統會自動做「換行清理」：去除多餘空行、統一換行符號。</div>
-      <pre id="script-out" class="pre"></pre>
-    </section>
-
-<section id="builder" class="tab">
-      <div class="hint"><b>把「單場完稿」勾選起來 → 一鍵建立「模組課程（活動）」</b><br/>預設存到「草稿」。</div>
-      <div class="row gap">
-        <input id="builder-q" class="input" placeholder="搜尋單場完稿（標題/標籤/摘要）"/>
-        <button id="btn-clear-picks" class="btn ghost">清空勾選</button>
-      </div>
-      <div id="builder-list" class="list"></div>
-
-      <div class="hr"></div>
-
-      <div class="row gap">
-        <input id="module-title" class="input" placeholder="模組課程（活動）名稱（必填）"/>
-        <select id="module-target" class="select"><option value="draft">存到：草稿</option><option value="final">存到：完稿</option></select>
-      </div>
-      <div class="row gap">
-        <input id="module-session-min" class="input" placeholder="每堂時間（例：90）可空" inputmode="numeric"/>
-        <input id="module-tags" class="input" placeholder="tags（逗號分隔，可空）"/>
-      </div>
-      <button id="btn-build-module" class="btn primary">建立模組課程（活動）</button>
-      <pre id="builder-result" class="pre"></pre>
-    </section>
-
-    <section id="api" class="tab">
-      <div class="hint">工具庫存（成功網址）</div>
-      <code id="tools-api" class="code"></code>
-      <button class="btn ghost copy" data-copy="#tools-api">複製驗證碼</button>
-
-      <div class="hint" style="margin-top:10px">課程管理（基底）</div>
-      <code id="course-api" class="code"></code>
-      <button class="btn ghost copy" data-copy="#course-api">複製驗證碼</button>
-
-      <div class="hr"></div>
-      <div class="row gap">
-        <button id="btn-ping" class="btn">ping</button>
-        <button id="btn-sample-list" class="btn">list final（前 20）</button>
-      </div>
-      <pre id="api-out" class="pre"></pre>
-    </section>
-
-  </section>
-
-  <footer class="footer">
-    Angel PWA｜把心站穩，活得自在。任何時候停下來，都可以。只要舒服，就很好。
-  </footer>
-</main>
-
-<div id="toast" class="toast"></div>
-<script src="./app.js"></script>
-</body></html>
+  <script src="./app.js"></script>
+</body>
+</html>
