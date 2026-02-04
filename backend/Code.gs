@@ -1,6 +1,8 @@
 /**
- * Angel Course Workbench API (GAS) - Full Overwrite (Fix)
- * Sheets in your spreadsheet:
+ * Angel Course Workbench API (GAS) - Full Overwrite (Stable Spreadsheet ID)
+ * Spreadsheet: 幸福教養課程管理（含四分頁）
+ *
+ * Sheets:
  * 1) 幸福教養課程   (final)
  * 2) 草稿         (draft)
  * 3) 發想         (idea)
@@ -9,22 +11,13 @@
  * Deploy:
  * - Execute as: Me
  * - Who has access: Anyone
- *
- * Frontend uses:
- *   GET  ?mode=ping
- *   GET  ?mode=list&state=idea|draft|final&q=...
- *   GET  ?mode=get&state=...&id=...
- *   POST ?mode=upsert&state=...   body: { item: {...} }  (Content-Type json or text/plain)
- *   GET  ?mode=promote&from=...&to=...&id=...&overwrite=1
- *   GET  ?mode=delete&state=...&id=...
- *
- * Tools export:
- *   GET  ?sheet=tools&format=tools
- *   GET  ?sheet=工具庫存管理&format=tools
  */
 
+// ✅ 固定指向你的試算表（最穩）
+const SPREADSHEET_ID = "1KFRAl2XIUlmIT8Bmi6Qwnmow9GQ-xjfj2CMHEhmMzUU";
+
 const SHEET_BY_STATE = {
-  idea: "發想",
+  idea:  "發想",
   draft: "草稿",
   final: "幸福教養課程",
 };
@@ -32,7 +25,6 @@ const SHEET_BY_STATE = {
 const BASE_HEADERS = [
   "id","title","type","status","version","owner","audience","duration_min","capacity","tags",
   "summary","objectives","outline","materials","links","assets","notes","created_at","updated_at",
-  // extra columns allowed; will auto-extend
 ];
 
 function doGet(e){
@@ -40,164 +32,170 @@ function doGet(e){
     const p = (e && e.parameter) ? e.parameter : {};
     const mode = String(p.mode || "").trim().toLowerCase();
 
-    // ===== tools export compatibility =====
+    // ===== tools export =====
     if (p.sheet && String(p.format || "").toLowerCase() === "tools") {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = getSS_();
       const sheetName = resolveSheetName_(p.sheet);
       const sh = ss.getSheetByName(sheetName);
-      if (!sh) {
-        return json({ ok:false, error:"Sheet not found: " + sheetName, hint:"Try ?mode=sheets to see sheet names." });
-      }
-      const items = sheetToObjects(sh);
-      return json({ ok:true, sheet: sheetName, count: items.length, tools: items });
+      if (!sh) return json_({ ok:false, error:"Sheet not found: " + sheetName, sheets: listSheets_(ss) });
+
+      const tools = sheetToObjects_(sh);
+      return json_({ ok:true, sheet: sheetName, count: tools.length, tools });
     }
 
-    // ===== health check =====
-    if(mode === "ping"){
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
-      return json({ ok:true, time: new Date().toISOString(), spreadsheet: ss.getName() });
+    // ===== ping =====
+    if (mode === "ping") {
+      const ss = getSS_();
+      return json_({ ok:true, time: new Date().toISOString(), spreadsheet: ss.getName(), id: SPREADSHEET_ID });
     }
 
     // ===== list sheets =====
     if (mode === "sheets" || mode === "listsheets" || mode === "list_sheets") {
-      return json({ ok: true, sheets: listSheets_() });
+      const ss = getSS_();
+      return json_({ ok:true, spreadsheet: ss.getName(), sheets: listSheets_(ss) });
     }
 
-    // ===== list items =====
-    if(mode === "list"){
-      const state = String(p.state || "idea").trim();
+    // ===== list =====
+    if (mode === "list") {
+      const state = normalizeState_(p.state || "idea");
       const sh = getStateSheet_(state);
-      const q = String(p.q || "").toLowerCase().trim();
-      const limit = Math.min(parseInt(p.limit || "300",10) || 300, 1000);
+      const q = String(p.q || "").trim().toLowerCase();
+      const limit = clampInt_(p.limit, 1, 1000, 300);
 
-      const items = sheetToObjects(sh);
-      const filtered = q ? items.filter(it=>{
-        const hay = (String(it.id||"")+" "+String(it.title||"")+" "+String(it.tags||"")+" "+String(it.summary||"")).toLowerCase();
-        return hay.indexOf(q) !== -1;
-      }) : items;
+      const items = sheetToObjects_(sh);
+      const filtered = q
+        ? items.filter(it => {
+            const hay = `${it.id||""} ${it.title||""} ${it.tags||""} ${it.summary||""}`.toLowerCase();
+            return hay.includes(q);
+          })
+        : items;
 
-      filtered.sort((a,b)=>String(b.updated_at||"").localeCompare(String(a.updated_at||"")));
-      return json({ ok:true, state, sheet: sh.getName(), count: filtered.length, items: filtered.slice(0, limit) });
+      filtered.sort((a,b)=> String(b.updated_at||"").localeCompare(String(a.updated_at||"")));
+      return json_({ ok:true, state, sheet: sh.getName(), count: filtered.length, items: filtered.slice(0, limit) });
     }
 
-    // ===== get one =====
-    if(mode === "get"){
-      const state = String(p.state || "idea").trim();
+    // ===== get =====
+    if (mode === "get") {
+      const state = normalizeState_(p.state || "idea");
       const id = String(p.id || "").trim();
-      if(!id) return json({ ok:false, error:"missing id" });
+      if (!id) return json_({ ok:false, error:"missing id" });
 
       const sh = getStateSheet_(state);
       const found = findById_(sh, id);
-      if(!found.row) return json({ ok:false, error:"not found: "+id, state, sheet: sh.getName() });
+      if (!found) return json_({ ok:false, error:"not found", id, state, sheet: sh.getName() });
 
-      const item = rowToObject_(found.headers, found.values);
-      return json({ ok:true, state, sheet: sh.getName(), item });
-    }
-
-    // ===== promote =====
-    if(mode === "promote"){
-      const from = String(p.from || "").trim();
-      const to = String(p.to || "").trim();
-      const id = String(p.id || "").trim();
-      if(!from || !to || !id) return json({ ok:false, error:"missing from/to/id" });
-
-      const fromSh = getStateSheet_(from);
-      const toSh = getStateSheet_(to);
-      const overwrite = String(p.overwrite || "0") === "1";
-
-      const found = findById_(fromSh, id);
-      if(!found.row) return json({ ok:false, error:"not found in "+from+": "+id });
-
-      const item = rowToObject_(found.headers, found.values);
-      item.status = to;
-      item.updated_at = new Date().toISOString();
-
-      upsert_(toSh, item, { overwrite });
-      return json({ ok:true, id, from, to });
+      return json_({ ok:true, state, sheet: sh.getName(), item: found.obj });
     }
 
     // ===== delete =====
-    if(mode === "delete"){
-      const state = String(p.state || "idea").trim();
+    if (mode === "delete") {
+      const state = normalizeState_(p.state || "idea");
       const id = String(p.id || "").trim();
-      if(!id) return json({ ok:false, error:"missing id" });
+      if (!id) return json_({ ok:false, error:"missing id" });
 
       const sh = getStateSheet_(state);
-      const found = findById_(sh, id);
-      if(!found.row) return json({ ok:false, error:"not found: "+id });
+      const found = findByIdRow_(sh, id);
+      if (!found) return json_({ ok:false, error:"not found", id });
 
-      sh.deleteRow(found.row);
-      return json({ ok:true, id, state, sheet: sh.getName() });
+      sh.deleteRow(found.rowIndex);
+      return json_({ ok:true, action:"deleted", state, sheet: sh.getName(), id });
     }
 
-    return json({ ok:false, error:"unknown mode", hint:"use mode=ping|sheets|list|get|promote|delete" });
+    // ===== promote =====
+    if (mode === "promote") {
+      const from = normalizeState_(p.from);
+      const to = normalizeState_(p.to);
+      const id = String(p.id || "").trim();
+      const overwrite = String(p.overwrite || "0") === "1";
+      if (!from || !to || !id) return json_({ ok:false, error:"missing from/to/id" });
+      if (from === to) return json_({ ok:false, error:"from and to are the same" });
 
-  }catch(err){
-    return json({ ok:false, error: String(err), stack: (err && err.stack) ? String(err.stack) : "" });
+      const fromSh = getStateSheet_(from);
+      const toSh = getStateSheet_(to);
+
+      const src = findById_(fromSh, id);
+      if (!src) return json_({ ok:false, error:"source not found", from, id });
+
+      const item = { ...src.obj };
+      item.status = to;
+      item.updated_at = new Date().toISOString();
+
+      const result = upsert_(toSh, item, { overwrite });
+      return json_({ ok:true, action: result.action, from, to, id: item.id });
+    }
+
+    return json_({ ok:false, error:"unknown mode", hint:"mode=ping|sheets|list|get|delete|promote or ?sheet=tools&format=tools" });
+
+  } catch(err) {
+    return json_({ ok:false, error: String(err), stack: err && err.stack ? String(err.stack) : "" });
   }
 }
 
 function doPost(e){
   try{
     const p = (e && e.parameter) ? e.parameter : {};
-    const mode = String(p.mode || "").trim().toLowerCase();
-    if(mode !== "upsert") return json({ ok:false, error:"unknown mode" });
+    const mode = String(p.mode || "upsert").trim().toLowerCase();
+    if (mode !== "upsert" && mode !== "save") return json_({ ok:false, error:"unknown mode" });
 
-    const state = String(p.state || "idea").trim();
+    const state = normalizeState_(p.state || "idea");
     const sh = getStateSheet_(state);
 
     const payload = parseBody_(e);
-    const item = (payload && payload.item) ? payload.item : payload;
+    const item = payload.item ? payload.item : payload;
+    if (!item) return json_({ ok:false, error:"missing item" });
 
-    if(!item) return json({ ok:false, error:"missing item" });
-
-    if(!item.id) item.id = genId_();
     const now = new Date().toISOString();
-    if(!item.created_at) item.created_at = now;
+    if (!item.id) item.id = genId_();
+    if (!item.created_at) item.created_at = now;
     item.updated_at = now;
     item.status = state;
 
-    const result = upsert_(sh, item, { overwrite:true });
-    return json({ ok:true, action: result.action, id: item.id, state, sheet: sh.getName(), item });
+    const result = upsert_(sh, item, { overwrite: true });
+    return json_({ ok:true, action: result.action, state, sheet: sh.getName(), id: item.id, item });
 
-  }catch(err){
-    return json({ ok:false, error: String(err), stack: (err && err.stack) ? String(err.stack) : "" });
+  } catch(err) {
+    return json_({ ok:false, error: String(err), stack: err && err.stack ? String(err.stack) : "" });
   }
 }
 
-/* ===== helpers ===== */
+/* ================= helpers ================= */
 
-function json(obj){
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
+function getSS_(){
+  return SpreadsheetApp.openById(SPREADSHEET_ID);
+}
+
+function json_(obj){
+  return ContentService.createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
 function parseBody_(e){
-  // supports: application/json, text/plain(json), x-www-form-urlencoded
+  // supports application/json, text/plain(json), form-urlencoded
   try{
-    if (e && e.postData && e.postData.contents) {
-      const raw = String(e.postData.contents || "").trim();
-      if (!raw) return {};
-      // if looks like JSON
-      if (raw[0] === "{" || raw[0] === "[") return JSON.parse(raw);
-    }
-  }catch(_){}
-  // fallback: form fields
+    const raw = e && e.postData && e.postData.contents ? String(e.postData.contents).trim() : "";
+    if (raw && (raw[0] === "{" || raw[0] === "[")) return JSON.parse(raw);
+  } catch(_){}
   const p = (e && e.parameter) ? e.parameter : {};
-  if (p.item) {
-    try { return { item: JSON.parse(p.item) }; } catch(_){}
-  }
+  if (p.item) { try { return { item: JSON.parse(p.item) }; } catch(_){} }
   return p;
 }
 
-function getStateSheet_(state){
-  const name = SHEET_BY_STATE[state];
-  if(!name) throw new Error("unknown state: "+state);
+function normalizeState_(s){
+  const v = String(s || "").trim().toLowerCase();
+  if (v === "idea" || v === "draft" || v === "final") return v;
+  if (v === "發想") return "idea";
+  if (v === "草稿") return "draft";
+  if (v === "幸福教養課程" || v === "幸福教養課程管理" || v === "完稿") return "final";
+  return "idea";
+}
 
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+function getStateSheet_(state){
+  const ss = getSS_();
+  const name = SHEET_BY_STATE[state];
+  if (!name) throw new Error("unknown state: " + state);
+
   let sh = ss.getSheetByName(name);
-  if(!sh){
+  if (!sh){
     sh = ss.insertSheet(name);
     sh.getRange(1,1,1,BASE_HEADERS.length).setValues([BASE_HEADERS]);
   }
@@ -207,97 +205,100 @@ function getStateSheet_(state){
 
 function ensureHeaders_(sh){
   const lastCol = Math.max(1, sh.getLastColumn());
-  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v || "").trim());
-  const missing = BASE_HEADERS.filter(h => headers.indexOf(h) === -1);
-  if(missing.length){
+  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v||"").trim());
+  const missing = BASE_HEADERS.filter(h => !headers.includes(h));
+  if (missing.length){
     sh.getRange(1, lastCol+1, 1, missing.length).setValues([missing]);
   }
 }
 
-function sheetToObjects(sh){
+function sheetToObjects_(sh){
   const lastRow = sh.getLastRow();
   const lastCol = Math.max(1, sh.getLastColumn());
-  if(lastRow < 2) return [];
+  if (lastRow < 2) return [];
 
-  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v || "").trim());
-  const data = sh.getRange(2,1,lastRow-1,lastCol).getValues();
-  return data.map(r => rowToObject_(headers, r)).filter(o => (o && (o.id || o.title)));
+  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v||"").trim());
+  const rows = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+  return rows.map(r => rowToObj_(headers, r)).filter(o => (o.id || o.title));
 }
 
-function rowToObject_(headers, row){
+function rowToObj_(headers, row){
   const obj = {};
   headers.forEach((h,i)=> { if(h) obj[h] = row[i]; });
+  obj.id = String(obj.id || "").trim();
+  obj.title = String(obj.title || "").trim();
+  obj.tags = String(obj.tags || "").trim();
   return obj;
 }
 
 function findById_(sh, id){
+  const found = findByIdRow_(sh, id);
+  return found ? { obj: found.obj } : null;
+}
+
+function findByIdRow_(sh, id){
   const lastRow = sh.getLastRow();
   const lastCol = Math.max(1, sh.getLastColumn());
-  if(lastRow < 2) return { row:null, headers:[], values:[] };
+  if (lastRow < 2) return null;
 
-  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v || "").trim());
+  const values = sh.getRange(1,1,lastRow,lastCol).getValues();
+  const headers = values[0].map(v => String(v||"").trim());
   const idIdx = headers.indexOf("id");
-  if(idIdx === -1) throw new Error("missing id column");
+  if (idIdx === -1) throw new Error("missing id column");
 
-  const idCol = idIdx + 1;
-  const ids = sh.getRange(2, idCol, lastRow-1, 1).getValues().map(r => String(r[0] || "").trim());
-  const idx = ids.indexOf(String(id).trim());
-  if(idx === -1) return { row:null, headers, values:[] };
-
-  const rowIndex = idx + 2;
-  const rowValues = sh.getRange(rowIndex, 1, 1, lastCol).getValues()[0];
-  return { row: rowIndex, headers, values: rowValues };
+  const target = String(id || "").trim();
+  for (let r=1; r<values.length; r++){
+    const cell = String(values[r][idIdx] || "").trim();
+    if (cell === target){
+      return { rowIndex: r+1, obj: rowToObj_(headers, values[r]) };
+    }
+  }
+  return null;
 }
 
 function upsert_(sh, item, opt){
   opt = opt || {};
   ensureHeaders_(sh);
 
-  let headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(v => String(v || "").trim());
-
-  // auto-extend columns for new keys
+  // extend headers for new keys
+  let headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(v => String(v||"").trim());
   const keys = Object.keys(item || {});
-  const missing = keys.filter(k => headers.indexOf(k) === -1);
-  if(missing.length){
+  const missing = keys.filter(k => !headers.includes(k));
+  if (missing.length){
     const lastCol = sh.getLastColumn();
     sh.getRange(1, lastCol+1, 1, missing.length).setValues([missing]);
-    headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(v => String(v || "").trim());
+    headers = sh.getRange(1,1,1,sh.getLastColumn()).getValues()[0].map(v => String(v||"").trim());
   }
 
-  const found = findById_(sh, String(item.id || "").trim());
-  const rowIndex = found.row;
+  const found = findByIdRow_(sh, item.id);
+  const row = headers.map(h => (item[h] !== undefined ? item[h] : (found ? found.obj[h] : "")));
 
-  const row = headers.map(h => {
-    if (!h) return "";
-    if (item[h] !== undefined) return item[h];
-    if (rowIndex) {
-      const idx = headers.indexOf(h);
-      return found.values[idx];
-    }
-    return "";
-  });
-
-  if(rowIndex){
-    sh.getRange(rowIndex, 1, 1, headers.length).setValues([row]);
-    return { action:"update" };
-  }else{
+  if (found){
+    sh.getRange(found.rowIndex, 1, 1, headers.length).setValues([row]);
+    return { action: "update" };
+  } else {
     sh.appendRow(row);
-    return { action:"insert" };
+    return { action: "insert" };
   }
 }
 
 function genId_(){
   const ts = Utilities.formatDate(new Date(), "Asia/Taipei", "yyyyMMdd-HHmmss");
-  const rand = Math.floor(Math.random()*900+100);
-  return "C-"+ts+"-"+rand;
+  const rnd = Math.floor(Math.random()*900+100);
+  return "C-" + ts + "-" + rnd;
 }
 
-function listSheets_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+function clampInt_(v, min, max, def){
+  const n = parseInt(v,10);
+  if (isNaN(n)) return def;
+  return Math.max(min, Math.min(max, n));
+}
+
+function listSheets_(ss){
   return ss.getSheets().map(s => s.getName());
 }
 
-function resolveSheetName_(name) {
+function resolveSheetName_(name){
   const v = String(name || "").trim();
   if (!v) return v;
   const lower = v.toLowerCase();
