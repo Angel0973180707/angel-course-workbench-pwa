@@ -3,10 +3,10 @@
  * Spreadsheet: 幸福教養課程管理（含四分頁）
  *
  * Sheets:
- * 1) 幸福教養課程   (final)
- * 2) 草稿         (draft)
- * 3) 發想         (idea)
- * 4) 工具庫存管理   (tools, read only)
+ * 1) 幸福教養課程     (final)
+ * 2) 草稿           (draft)
+ * 3) 發想           (idea)
+ * 4) 工具庫存管理     (tools, read only)
  *
  * Deploy:
  * - Execute as: Me
@@ -32,15 +32,26 @@ function doGet(e){
     const p = (e && e.parameter) ? e.parameter : {};
     const mode = String(p.mode || "").trim().toLowerCase();
 
-    // ===== tools export =====
+    // ===== tools export (✅ supports toolCode/name headers) =====
+    // use:
+    //   ?sheet=工具庫存管理&format=tools
+    // or
+    //   ?sheet=tools&format=tools
     if (p.sheet && String(p.format || "").toLowerCase() === "tools") {
       const ss = getSS_();
       const sheetName = resolveSheetName_(p.sheet);
       const sh = ss.getSheetByName(sheetName);
       if (!sh) return json_({ ok:false, error:"Sheet not found: " + sheetName, sheets: listSheets_(ss) });
 
-      const tools = sheetToObjects_(sh);
-      return json_({ ok:true, sheet: sheetName, count: tools.length, tools });
+      // raw rows (any headers)
+      const tools_raw = sheetToObjectsAnyHeader_(sh);
+
+      // normalized for frontend
+      const tools = tools_raw
+        .map(t => normalizeTool_(t))
+        .filter(t => (t.id || t.title)); // toolCode/name -> id/title
+
+      return json_({ ok:true, sheet: sheetName, count: tools.length, tools, tools_raw });
     }
 
     // ===== ping =====
@@ -124,7 +135,7 @@ function doGet(e){
       return json_({ ok:true, action: result.action, from, to, id: item.id });
     }
 
-    return json_({ ok:false, error:"unknown mode", hint:"mode=ping|sheets|list|get|delete|promote or ?sheet=tools&format=tools" });
+    return json_({ ok:false, error:"unknown mode", hint:"mode=ping|sheets|list|get|delete|promote or ?sheet=工具庫存管理&format=tools" });
 
   } catch(err) {
     return json_({ ok:false, error: String(err), stack: err && err.stack ? String(err.stack) : "" });
@@ -212,6 +223,7 @@ function ensureHeaders_(sh){
   }
 }
 
+// ====== for course sheets (needs id/title) ======
 function sheetToObjects_(sh){
   const lastRow = sh.getLastRow();
   const lastCol = Math.max(1, sh.getLastColumn());
@@ -229,6 +241,52 @@ function rowToObj_(headers, row){
   obj.title = String(obj.title || "").trim();
   obj.tags = String(obj.tags || "").trim();
   return obj;
+}
+
+// ====== for tools sheet (any headers) ======
+function sheetToObjectsAnyHeader_(sh){
+  const lastRow = sh.getLastRow();
+  const lastCol = Math.max(1, sh.getLastColumn());
+  if (lastRow < 2) return [];
+
+  const headers = sh.getRange(1,1,1,lastCol).getValues()[0].map(v => String(v||"").trim());
+  const rows = sh.getRange(2,1,lastRow-1,lastCol).getValues();
+
+  return rows
+    .map(r => {
+      const obj = {};
+      headers.forEach((h,i)=> { if(h) obj[h] = r[i]; });
+      return obj;
+    })
+    .filter(o => Object.keys(o).some(k => String(o[k]||"").trim() !== ""));
+}
+
+function normalizeTool_(t){
+  // your tool headers:
+  // toolCode	name	core	pain_points	chapters	steps	tips	link	category	video_title	video_link	status
+  const id = String(t.toolCode || t.id || "").trim();
+  const title = String(t.name || t.title || "").trim();
+
+  const tags = [
+    String(t.pain_points || "").trim(),
+    String(t.category || "").trim()
+  ].filter(Boolean).join(" ");
+
+  return {
+    id,
+    title,
+    link: String(t.link || "").trim(),
+    category: String(t.category || "").trim(),
+    core: String(t.core || "").trim(),
+    pain_points: String(t.pain_points || "").trim(),
+    chapters: String(t.chapters || "").trim(),
+    steps: String(t.steps || "").trim(),
+    tips: String(t.tips || "").trim(),
+    video_title: String(t.video_title || "").trim(),
+    video_link: String(t.video_link || "").trim(),
+    status: String(t.status || "").trim(),
+    tags
+  };
 }
 
 function findById_(sh, id){
