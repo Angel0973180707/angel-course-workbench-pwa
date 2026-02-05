@@ -1,205 +1,27 @@
 <!doctype html>
 <html lang="zh-Hant">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Angel｜幸福教養課程工作台</title>
-  <meta name="theme-color" content="#0c2a16" />
-  <meta name="description" content="幸福教養｜課程設計工作台（發想/草稿/完稿）＋工具庫勾選＋一鍵AI指令＋存回試算表" />
-
-  <!-- PWA -->
-  <link rel="manifest" href="./manifest.json" />
-  <link rel="icon" href="./icons/icon-192.png" />
-
-  <!-- iOS Add to Home Screen -->
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="CourseWB" />
-  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
-
-  <link rel="stylesheet" href="./styles.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Angel｜幸福教養課程工作台 v2</title>
+<link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="brandMark">幸福教養</div>
-      <div class="brandTitle">課程工作台</div>
-    </div>
-    <button id="btnSettings" class="btn btn-ghost" type="button" aria-label="設定">設定</button>
-  </header>
+<h1>Angel 課程工作台 v2</h1>
+<p>狀態切換後，AI 協作指令會自動變化。</p>
 
-  <main class="wrap">
-    <section class="statusBar card">
-      <div class="statusLeft">
-        <div class="statusLabel">狀態</div>
-        <div class="seg" role="tablist" aria-label="狀態切換">
-          <button class="segBtn" data-state="idea" role="tab">發想</button>
-          <button class="segBtn" data-state="draft" role="tab">草稿</button>
-          <button class="segBtn" data-state="final" role="tab">完稿</button>
-        </div>
-      </div>
-      <div class="statusRight">
-        <div class="mini">
-          <div class="miniLabel">後臺存放</div>
-          <div class="miniValue" id="sheetHint">—</div>
-        </div>
-        <div class="mini">
-          <div class="miniLabel">最後訊息</div>
-          <div class="miniValue" id="toastLine">準備好了</div>
-        </div>
-      </div>
-    </section>
+<select id="state">
+  <option value="idea">發想</option>
+  <option value="draft">草稿</option>
+  <option value="final">完稿</option>
+</select>
 
-    <section class="grid2">
-      <section class="card editor">
-        <div class="cardHead">
-          <h2>一、編輯區</h2>
-          <div class="cardHeadActions">
-            <button id="btnNew" class="btn btn-secondary" type="button">新增</button>
-            <button id="btnSave" class="btn" type="button">存回後臺</button>
-          </div>
-        </div>
+<textarea id="courseTitle" placeholder="課程名稱"></textarea>
+<textarea id="core" placeholder="核心概念"></textarea>
 
-        <div class="form">
-          <div class="row2">
-            <label class="field">
-              <div class="lab">1. 主題（title）</div>
-              <input id="f_title" type="text" placeholder="例如：大人先穩定｜情緒急救到關係修復" />
-            </label>
-            <label class="field">
-              <div class="lab">11. ID（id）</div>
-              <input id="f_id" type="text" placeholder="空白=系統自動產生" />
-              <div class="hint">留空可自動產生；你也可以自己取。</div>
-            </label>
-          </div>
+<button id="btnAI">一鍵複製 AI 指令</button>
+<textarea id="aiOut" rows="10" readonly></textarea>
 
-          <div class="row2">
-            <label class="field">
-              <div class="lab">2. 形式（kind）</div>
-              <select id="f_kind">
-                <option value="單場演講">單場演講</option>
-                <option value="單場課程">單場課程</option>
-                <option value="單場活動">單場活動</option>
-                <option value="模組課程">模組課程</option>
-                <option value="研習（有作業）">研習（有作業）</option>
-                <option value="其他">其他（手動輸入）</option>
-              </select>
-            </label>
-            <label class="field">
-              <div class="lab">其他（kind_other）</div>
-              <input id="f_kind_other" type="text" placeholder="當形式=其他時填" />
-            </label>
-          </div>
-
-          <div class="row2">
-            <label class="field">
-              <div class="lab">4. 單堂時數 / 總時數</div>
-              <div class="rowInline">
-                <input id="f_duration_min" type="text" placeholder="單堂：例如 90" />
-                <input id="f_total_duration" type="text" placeholder="總時數：例如 6小時 / 360" />
-              </div>
-              <div class="hint">可填分鐘或文字（例如「2小時」）。</div>
-            </label>
-            <label class="field">
-              <div class="lab">5. 人數（capacity）</div>
-              <input id="f_capacity" type="text" placeholder="例如：20" />
-            </label>
-          </div>
-
-          <div class="row2">
-            <label class="field">
-              <div class="lab">6. 實施地點（location）</div>
-              <input id="f_location" type="text" placeholder="例如：學校/社區/企業/天使農場" />
-            </label>
-            <label class="field">
-              <div class="lab">場所（室內/戶外）</div>
-              <select id="f_venue_type">
-                <option value="室內">室內</option>
-                <option value="戶外">戶外</option>
-                <option value="皆可">皆可</option>
-              </select>
-            </label>
-          </div>
-
-          <label class="field">
-            <div class="lab">7. 核心概念（core_concept）</div>
-            <textarea id="f_core_concept" rows="2" placeholder="一句話講清楚：這堂課要把什麼『站穩』"></textarea>
-          </label>
-
-          <div class="toolsBlock">
-            <div class="toolsHead">
-              <div>
-                <div class="lab">8. 工具勾選（主/副）</div>
-                <div class="hint">至少要選一個主工具。</div>
-              </div>
-              <button id="btnPickTools" class="btn btn-secondary" type="button">選工具</button>
-            </div>
-
-            <div class="toolsPicked">
-              <div class="pickedRow">
-                <div class="pickedLab">主工具</div>
-                <div class="pickedVal" id="mainToolLine">未選</div>
-              </div>
-              <div class="pickedRow">
-                <div class="pickedLab">副工具</div>
-                <div class="pickedVal" id="subToolsLine">未選</div>
-              </div>
-            </div>
-          </div>
-
-          <label class="field">
-            <div class="lab">9. 活動簡述（summary）</div>
-            <textarea id="f_summary" rows="3" placeholder="對外一句話描述（或提案用短段落）"></textarea>
-          </label>
-
-          <label class="field">
-            <div class="lab">10. AI 協作（可一鍵複製）</div>
-            <div class="aiBtns">
-              <button id="btnCopyAI" class="btn" type="button">一鍵複製｜AI 指令</button>
-              <button id="btnCopyTSV" class="btn btn-secondary" type="button">一鍵複製｜TSV 一列</button>
-            </div>
-            <textarea id="aiPreview" rows="10" readonly></textarea>
-            <div class="hint">已自動把你填的資料塞進母版：可直接貼到 ChatGPT / Gemini。</div>
-          </label>
-
-          <label class="field">
-            <div class="lab">表單一列（可貼回試算表）</div>
-            <textarea id="tsvPreview" rows="3" readonly></textarea>
-          </label>
-        </div>
-      </section>
-
-      <section class="stack">
-        <section class="card listPane">
-          <div class="cardHead">
-            <h2>二、三狀態清單</h2>
-            <div class="cardHeadActions">
-              <button id="btnReload" class="btn btn-secondary" type="button">同步清單</button>
-            </div>
-          </div>
-
-          <div class="listTools">
-            <input id="q" type="search" placeholder="搜尋：主題 / 標籤 / ID" />
-            <button id="btnSearch" class="btn btn-secondary" type="button">搜尋</button>
-          </div>
-
-          <div id="list" class="list"></div>
-          <div class="hint">點清單可載入到左側直接編輯。</div>
-        </section>
-
-        <section class="card">
-          <div class="cardHead">
-            <h2>v1 說明</h2>
-          </div>
-          <div class="hint">
-            v1 先把「工具勾選、AI 協作、存回試算表」做穩。<br/>
-            下一版再加：模組課程 / 提案彙整。
-          </div>
-        </section>
-      </section>
-    </section>
-  </main>
-
-  <script src="./app.js"></script>
+<script src="./app.js"></script>
 </body>
 </html>
