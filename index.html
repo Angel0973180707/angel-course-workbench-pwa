@@ -3,10 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-
   <title>Angel｜幸福教養課程工作台</title>
   <meta name="theme-color" content="#0c2a16" />
-  <meta name="description" content="幸福教養｜課程設計工作台（發想/草稿/完稿）＋工具庫勾選＋組合模組課程＋一鍵AI指令＋存回試算表" />
+  <meta name="description" content="幸福教養｜課程設計工作台（發想/草稿/完稿）＋工具庫勾選＋一鍵AI指令＋存回試算表" />
 
   <!-- PWA -->
   <link rel="manifest" href="./manifest.json" />
@@ -131,7 +130,7 @@
             <div class="toolsHead">
               <div>
                 <div class="lab">8. 工具勾選（主/副）</div>
-                <div class="hint">所有活動都要搭配工具書：至少要選一個主工具。</div>
+                <div class="hint">至少要選一個主工具。</div>
               </div>
               <button id="btnPickTools" class="btn btn-secondary" type="button">選工具</button>
             </div>
@@ -159,7 +158,7 @@
               <button id="btnCopyAI" class="btn" type="button">一鍵複製｜AI 指令</button>
               <button id="btnCopyTSV" class="btn btn-secondary" type="button">一鍵複製｜TSV 一列</button>
             </div>
-            <textarea id="aiPreview" rows="8" readonly></textarea>
+            <textarea id="aiPreview" rows="10" readonly></textarea>
             <div class="hint">已自動把你填的資料塞進母版：可直接貼到 ChatGPT / Gemini。</div>
           </label>
 
@@ -185,54 +184,21 @@
           </div>
 
           <div id="list" class="list"></div>
-          <div class="hint">點清單可載入到左側直接編輯；也可一鍵「升級層級」。</div>
+          <div class="hint">點清單可載入到左側直接編輯。</div>
         </section>
 
-        <section class="card modulePane">
+        <section class="card">
           <div class="cardHead">
-            <h2>三、組合模組課程</h2>
-            <div class="cardHeadActions">
-              <button id="btnModuleSync" class="btn btn-secondary" type="button">載入完稿</button>
-              <button id="btnBuildModule" class="btn" type="button">建立模組並存入完稿</button>
-            </div>
+            <h2>v1 說明</h2>
           </div>
-
-          <div class="hint">從完稿挑選多個單場完稿，組合成模組課程（活動），存入完稿。</div>
-
-          <div class="row2">
-            <label class="field">
-              <div class="lab">模組主題</div>
-              <input id="m_title" type="text" placeholder="例如：幸福教養模組｜從情緒急救到關係修復" />
-            </label>
-            <label class="field">
-              <div class="lab">模組總時數</div>
-              <input id="m_total_duration" type="text" placeholder="例如：2天 / 12小時 / 720" />
-            </label>
+          <div class="hint">
+            v1 先把「工具勾選、AI 協作、存回試算表」做穩。<br/>
+            下一版再加：模組課程 / 提案彙整。
           </div>
-
-          <div class="moduleListTools">
-            <input id="m_q" type="search" placeholder="篩選完稿：關鍵字" />
-            <button id="btnModuleFilter" class="btn btn-secondary" type="button">篩選</button>
-          </div>
-
-          <div id="moduleList" class="list small"></div>
-        </section>
-
-        <section class="card proposalPane">
-          <div class="cardHead">
-            <h2>四、提案功能</h2>
-            <div class="cardHeadActions">
-              <button id="btnCopyProposal" class="btn" type="button">一鍵複製｜提案摘要</button>
-            </div>
-          </div>
-          <div class="hint">把你目前左側內容整理成「活動簡案」可直接貼。</div>
-          <textarea id="proposalPreview" rows="6" readonly></textarea>
         </section>
       </section>
     </section>
   </main>
-
-  <!-- Settings / ToolPicker 區塊保持你原本內容即可（若你有改動就保留原檔） -->
 
   <script src="./app.js"></script>
 </body>
