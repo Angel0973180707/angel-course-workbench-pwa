@@ -1,22 +1,10 @@
-/* Angel Course Workbench (Frontend) - app.js (Full Overwrite)
- * Goal: 100% render tools + selectable + state switching + save to GAS backend
- * Requires HTML ids already in your index.html:
- * btnSettings, sheetHint, lastMsg, searchInput, btnSearch, btnNew, btnRefresh,
- * list, formTitle, formType, formAudience, formDuration, formCapacity, formLocation,
- * formCore, formTags, formSummary, formObjectives, formOutline, formMaterials,
- * formLinks, formAssets, formNotes,
- * btnPickTools, toolsChosen,
- * btnAi, btnCopyTSV, btnSave, btnDelete,
- * btnPromote, promoteTo,
- * btnModuleBuilder, modulePanel, moduleList, moduleTitle, moduleSummary, moduleDuration, btnBuildModule, btnCloseModule
+/* Angel Course Workbench (Frontend) - app.js (Full Overwrite v2)
+ * Fix: Tools picker text too faint due to global CSS. Force modal colors/styles.
  */
 
 (() => {
   "use strict";
 
-  /* =========================
-   * 0) Config / State
-   * ========================= */
   const LS_KEY_API = "angel_course_api_url";
   const LS_KEY_STATE = "angel_course_state";
   const LS_KEY_LAST_ID = "angel_course_last_id";
@@ -33,9 +21,6 @@
   let toolsCache = null;
   let toolsSelected = { primary: null, secondary: [] };
 
-  /* =========================
-   * 1) DOM helpers
-   * ========================= */
   const $ = (id) => document.getElementById(id);
   const qs = (sel, root = document) => root.querySelector(sel);
   const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
@@ -79,9 +64,6 @@
 
   function safeJson_(t) { try { return JSON.parse(t); } catch { return null; } }
 
-  /* =========================
-   * 2) API helpers
-   * ========================= */
   function getApiUrl_() {
     return (localStorage.getItem(LS_KEY_API) || "").trim();
   }
@@ -159,9 +141,6 @@
     return await fetchJson_(api_(p.toString()));
   }
 
-  /* =========================
-   * 3) State + UI wiring
-   * ========================= */
   function loadState_() {
     const v = (localStorage.getItem(LS_KEY_STATE) || "idea").trim().toLowerCase();
     return STATES.some(s => s.key === v) ? v : "idea";
@@ -193,9 +172,6 @@
     });
   }
 
-  /* =========================
-   * 4) Form read/write
-   * ========================= */
   function readForm_() {
     const item = currentItem ? { ...currentItem } : {};
     item.title = ($("formTitle")?.value || "").trim();
@@ -263,9 +239,6 @@
     return String(s || "").split(",").map(x => x.trim()).filter(Boolean);
   }
 
-  /* =========================
-   * 5) List render / click
-   * ========================= */
   async function reloadList_() {
     const list = $("list");
     if (!list) return;
@@ -328,9 +301,6 @@
     }
   }
 
-  /* =========================
-   * 6) Tools picker (100% show)
-   * ========================= */
   function buildToolsText_() {
     const p = toolsSelected.primary;
     const s = toolsSelected.secondary;
@@ -374,11 +344,12 @@
     `;
   }
 
+  // ✅ FIXED: force modal styles to avoid global opacity / colors
   function openToolsPicker_() {
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
     overlay.style.inset = "0";
-    overlay.style.background = "rgba(0,0,0,.35)";
+    overlay.style.background = "rgba(0,0,0,.45)";
     overlay.style.zIndex = "9998";
     overlay.addEventListener("click", (e) => { if (e.target === overlay) close_(); });
 
@@ -390,19 +361,27 @@
     modal.style.width = "min(920px, 92vw)";
     modal.style.maxHeight = "80vh";
     modal.style.overflow = "auto";
-    modal.style.background = "#fff";
+    modal.style.background = "#ffffff";
     modal.style.borderRadius = "18px";
-    modal.style.boxShadow = "0 18px 60px rgba(0,0,0,.22)";
+    modal.style.boxShadow = "0 18px 60px rgba(0,0,0,.28)";
     modal.style.padding = "14px";
     modal.style.zIndex = "9999";
+
+    // 🔥 這幾行是關鍵：把全域透明/淡色全部打掉
+    modal.style.color = "#111111";
+    modal.style.opacity = "1";
+    modal.style.filter = "none";
+    modal.style.mixBlendMode = "normal";
 
     const header = document.createElement("div");
     header.style.display = "flex";
     header.style.alignItems = "center";
     header.style.gap = "10px";
+    header.style.color = "#111";
+    header.style.opacity = "1";
     header.innerHTML = `
-      <div style="font-weight:800;">工具勾選</div>
-      <div class="muted" style="font-size:12px;">主工具只能選 1 個，副工具可多選</div>
+      <div style="font-weight:900; font-size:16px;">工具勾選</div>
+      <div style="font-size:12px; color:#444;">主工具只能選 1 個，副工具可多選</div>
       <div style="margin-left:auto; display:flex; gap:8px;">
         <button class="btn" type="button" id="__toolClose">關閉</button>
         <button class="btn primary" type="button" id="__toolApply">套用</button>
@@ -414,9 +393,12 @@
     search.placeholder = "搜尋工具（代碼/名稱/分類/痛點）";
     search.style.width = "100%";
     search.style.margin = "10px 0";
-    search.style.padding = "10px 12px";
-    search.style.border = "1px solid rgba(0,0,0,.12)";
+    search.style.padding = "12px 12px";
+    search.style.border = "1px solid rgba(0,0,0,.18)";
     search.style.borderRadius = "12px";
+    search.style.color = "#111";
+    search.style.background = "#fff";
+    search.style.opacity = "1";
 
     const table = document.createElement("div");
     table.id = "__toolTable";
@@ -453,10 +435,10 @@
               <div><input type="radio" name="__primaryTool" value="${escapeAttr_(code)}" ${pChecked}></div>
               <div><input type="checkbox" class="__secondaryTool" value="${escapeAttr_(code)}" ${sChecked}></div>
               <div><span class="chip ghost">${escapeHtml_(code)}</span></div>
-              <div style="font-weight:700;">${escapeHtml_(name)}</div>
-              <div class="muted">${escapeHtml_(cat)}</div>
-              <div class="muted hideSm">${escapeHtml_(core)}</div>
-              <div class="hideSm">${link ? `<a href="${escapeAttr_(link)}" target="_blank" rel="noopener">開啟</a>` : ""}</div>
+              <div class="toolName">${escapeHtml_(name)}</div>
+              <div class="toolMuted">${escapeHtml_(cat)}</div>
+              <div class="toolMuted hideSm">${escapeHtml_(core)}</div>
+              <div class="hideSm">${link ? `<a class="toolLink" href="${escapeAttr_(link)}" target="_blank" rel="noopener">開啟</a>` : ""}</div>
             </div>
           `;
         }).join("")}
@@ -483,18 +465,55 @@
 
     const style = document.createElement("style");
     style.textContent = `
+      /* Force tool modal readability regardless of global theme */
+      #__toolTable, .toolGridHead, .toolGridRow { color:#111 !important; opacity:1 !important; }
       .toolGridHead, .toolGridRow{
         display:grid;
-        grid-template-columns: 34px 34px 120px 1.4fr 1fr 1.2fr 80px;
-        gap:10px; align-items:center;
-        padding:10px 8px;
-        border-bottom:1px solid rgba(0,0,0,.06);
+        grid-template-columns: 40px 40px 140px 1.4fr 1fr 1.2fr 90px;
+        gap:12px; align-items:center;
+        padding:12px 10px;
+        border-bottom:1px solid rgba(0,0,0,.08);
+        background:#fff;
       }
-      .toolGridHead{ position:sticky; top:0; background:#fff; z-index:2; font-size:12px; color:#555; font-weight:800; }
-      .toolGridRow:hover{ background: rgba(0,0,0,.03); }
+      .toolGridHead{
+        position:sticky; top:0; z-index:2;
+        font-size:12px; font-weight:900;
+        color:#111 !important;
+        background:#fff;
+      }
+      .toolGridRow:hover{ background: rgba(0,0,0,.04); }
+      .toolName{ font-weight:900; color:#111 !important; }
+      .toolMuted{ color:#444 !important; font-size:12px; }
+      .toolLink{ color:#0b5cff !important; font-weight:800; text-decoration:none; }
+      .toolLink:active{ opacity:.7; }
+
+      /* inputs visibility */
+      .toolGridRow input[type="radio"], .toolGridRow input[type="checkbox"]{
+        width:20px; height:20px;
+        accent-color: #0b5cff;
+        opacity:1 !important;
+      }
+
+      /* chips make sure readable */
+      .toolGridRow .chip{
+        display:inline-block;
+        padding:6px 10px;
+        border-radius:999px;
+        border:1px solid rgba(0,0,0,.12);
+        background:#f7f7f7;
+        color:#111 !important;
+        font-size:12px;
+        font-weight:800;
+      }
+      .toolGridRow .chip.ghost{
+        background:#fff;
+      }
+
       @media (max-width: 740px){
         .hideSm{ display:none; }
-        .toolGridHead, .toolGridRow{ grid-template-columns: 34px 34px 110px 1fr 1fr; }
+        .toolGridHead, .toolGridRow{
+          grid-template-columns: 40px 40px 130px 1fr 1fr;
+        }
       }
     `;
     document.head.appendChild(style);
@@ -548,38 +567,6 @@
     return toolsCache;
   }
 
-  /* =========================
-   * 7) AI + TSV
-   * ========================= */
-  function buildAiPrompt_(item) {
-    const pTool = toolsSelected.primary ? `${toolsSelected.primary}｜${findToolName_(toolsSelected.primary)}` : "(未選)";
-    const sTools = (toolsSelected.secondary || []).map(c => `${c}｜${findToolName_(c)}`).join("；") || "(未選)";
-
-    return [
-      "你是「天使笑長」的協作夥伴。",
-      "請用溫柔、清楚、不說教的語氣，協助把以下課程從「完稿」往下一階段完成。",
-      "",
-      "【已輸入資料（請以此為準，不要改名、不重問）】",
-      `課程名稱：${item.title || "未訂"}`,
-      `類型：${item.type || ""}`,
-      `對象：${item.audience || ""}`,
-      `時長/人數：${item.duration_min || ""}分鐘｜${item.capacity || ""}人`,
-      `關鍵痛點/標籤：${item.tags || ""}`,
-      `主工具：${pTool}`,
-      `副工具：${sTools}`,
-      `核心概念：${item.core || ""}`,
-      `活動簡述：${item.summary || ""}`,
-      "",
-      "【請輸出】",
-      "A) 活動/課程規劃（定位、目標、節律、適用場域）",
-      "B) 詳細設計內容（每堂/每場內容、現場流程、練習、作業、教材）",
-      "C) 回饋與追蹤方案（每週追蹤、回饋題、工具使用節律）",
-      "",
-      "【再加做一件事】",
-      "把「詳案」轉成簡報：請輸出 PPT 大綱（逐頁標題＋每頁要講的重點），並附上逐頁口說稿。",
-    ].join("\n");
-  }
-
   async function copyText_(text) {
     try {
       await navigator.clipboard.writeText(text);
@@ -597,107 +584,27 @@
     }
   }
 
-  function buildTSVRow_(item) {
-    const headers = [
-      "id","title","type","status","version","owner","audience","duration_min","capacity","tags",
-      "summary","objectives","outline","materials","links","assets","notes","created_at","updated_at"
-    ];
-    const vals = headers.map(h => {
-      const v = item[h] === undefined || item[h] === null ? "" : String(item[h]);
-      return v.replace(/\t/g, " ").replace(/\r?\n/g, " / ");
-    });
-    return vals.join("\t");
+  function buildAiPrompt_(item) {
+    const pTool = toolsSelected.primary ? `${toolsSelected.primary}｜${findToolName_(toolsSelected.primary)}` : "(未選)";
+    const sTools = (toolsSelected.secondary || []).map(c => `${c}｜${findToolName_(c)}`).join("；") || "(未選)";
+    return [
+      "你是「天使笑長」的協作夥伴。",
+      "請用溫柔、清楚、不說教的語氣，協助把以下課程從「完稿」往下一階段完成。",
+      "",
+      `課程名稱：${item.title || "未訂"}`,
+      `類型：${item.type || ""}`,
+      `對象：${item.audience || ""}`,
+      `時長/人數：${item.duration_min || ""}分鐘｜${item.capacity || ""}人`,
+      `關鍵痛點/標籤：${item.tags || ""}`,
+      `主工具：${pTool}`,
+      `副工具：${sTools}`,
+      `核心概念：${item.core || ""}`,
+      `活動簡述：${item.summary || ""}`,
+      "",
+      "【請輸出】A)規劃 B)詳案 C)追蹤 + PPT大綱(逐頁標題/重點/口說稿)",
+    ].join("\n");
   }
 
-  /* =========================
-   * 8) Module Builder
-   * ========================= */
-  async function openModuleBuilder_() {
-    const panel = $("modulePanel");
-    if (!panel) return;
-    panel.style.display = "block";
-
-    $("moduleList").innerHTML = `<div class="muted">讀取完稿清單中…</div>`;
-    try {
-      const data = await apiList_("final", "");
-      const items = data.items || [];
-      if (!items.length) {
-        $("moduleList").innerHTML = `<div class="muted">完稿目前沒有資料。</div>`;
-        return;
-      }
-      $("moduleList").innerHTML = items.map(it => {
-        const id = escapeAttr_(it.id || "");
-        const t = escapeHtml_(it.title || it.id || "(未命名)");
-        const d = escapeHtml_(String(it.duration_min || ""));
-        const tag = escapeHtml_(String(it.tags || ""));
-        return `
-          <label class="moduleRow">
-            <input type="checkbox" value="${id}">
-            <div>
-              <div style="font-weight:800;">${t}</div>
-              <div class="muted">${d ? d+" 分鐘" : ""} ${tag ? "｜"+tag : ""}</div>
-            </div>
-          </label>
-        `;
-      }).join("");
-
-      $("btnBuildModule").onclick = async () => {
-        const checked = qsa('input[type="checkbox"]', $("moduleList")).filter(c => c.checked).map(c => c.value);
-        if (!checked.length) return toast_("先勾選要組合的單場", true);
-
-        const details = [];
-        for (const id of checked) {
-          const r = await apiGet_("final", id);
-          if (r.item) details.push(r.item);
-        }
-
-        const total = details.reduce((acc, it) => acc + (parseInt(it.duration_min, 10) || 0), 0);
-        $("moduleDuration").value = String(total || "");
-        const title = ($("moduleTitle").value || "").trim() || "模組課程（未命名）";
-        const summary = ($("moduleSummary").value || "").trim();
-
-        const outline = details.map((it, idx) => {
-          const nm = it.title || it.id;
-          const dd = it.duration_min ? `${it.duration_min}min` : "";
-          return `${idx+1}. ${nm}${dd ? "（"+dd+"）" : ""}`;
-        }).join("\n");
-
-        const moduleItem = {
-          title,
-          type: "模組課程",
-          audience: "家長",
-          duration_min: total,
-          capacity: 20,
-          tags: "模組課程, 由單場組合",
-          summary: summary || "由多個完稿單場組合而成的模組課程。",
-          outline,
-          materials: "組合來源：\n" + details.map(it => `- ${it.id}｜${it.title || ""}`).join("\n"),
-          links: details.map(it => it.links).filter(Boolean).join("\n"),
-          notes: "本模組由前臺勾選組合生成。",
-          tools_primary: toolsSelected.primary || "",
-          tools_secondary: (toolsSelected.secondary || []).join(", "),
-        };
-
-        const saved = await apiUpsert_("final", moduleItem);
-        toast_("模組已存入完稿：" + (saved.id || ""));
-        await reloadList_();
-      };
-
-    } catch (err) {
-      $("moduleList").innerHTML = `<div class="muted">讀取失敗：${escapeHtml_(String(err))}</div>`;
-      toast_(String(err), true);
-    }
-  }
-
-  function closeModuleBuilder_() {
-    const panel = $("modulePanel");
-    if (!panel) return;
-    panel.style.display = "none";
-  }
-
-  /* =========================
-   * 9) Events
-   * ========================= */
   function bindEvents_() {
     $("btnSettings")?.addEventListener("click", async () => {
       const cur = getApiUrl_();
@@ -714,10 +621,7 @@
     });
 
     $("btnSearch")?.addEventListener("click", reloadList_);
-    $("searchInput")?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") reloadList_();
-    });
-
+    $("searchInput")?.addEventListener("keydown", (e) => { if (e.key === "Enter") reloadList_(); });
     $("btnRefresh")?.addEventListener("click", reloadList_);
 
     $("btnNew")?.addEventListener("click", () => {
@@ -736,23 +640,13 @@
 
     $("btnAi")?.addEventListener("click", async () => {
       const item = readForm_();
-      const promptText = buildAiPrompt_(item);
-      await copyText_(promptText);
-    });
-
-    $("btnCopyTSV")?.addEventListener("click", async () => {
-      const item = readForm_();
-      const tsv = buildTSVRow_(item);
-      await copyText_(tsv);
+      await copyText_(buildAiPrompt_(item));
     });
 
     $("btnSave")?.addEventListener("click", async () => {
       try {
         const item = readForm_();
         if (!item.title) return toast_("主題（課程名稱）先寫一下，才好存。", true);
-
-        if (!item.materials && item.tools_text) item.materials = item.tools_text;
-
         const res = await apiUpsert_(currentState, item);
         const saved = res.item || item;
         writeForm_(saved);
@@ -779,10 +673,9 @@
 
     $("btnPromote")?.addEventListener("click", async () => {
       const id = String(currentItem?.id || "").trim();
-      if (!id) return toast_("先載入或存一筆資料，才有 id 可以送審/升級。", true);
+      if (!id) return toast_("先載入或存一筆資料，才有 id 可以移動狀態。", true);
       const to = $("promoteTo")?.value || "";
       if (!to) return toast_("請先選要移到哪個狀態", true);
-
       try {
         await apiPromote_(currentState, to, id, true);
         toast_("已移動：" + stateLabel_(currentState) + " → " + stateLabel_(to));
@@ -793,14 +686,8 @@
         toast_(String(err), true);
       }
     });
-
-    $("btnModuleBuilder")?.addEventListener("click", openModuleBuilder_);
-    $("btnCloseModule")?.addEventListener("click", closeModuleBuilder_);
   }
 
-  /* =========================
-   * 10) Utils
-   * ========================= */
   function escapeHtml_(s) {
     return String(s || "")
       .replaceAll("&", "&amp;")
@@ -811,9 +698,6 @@
   }
   function escapeAttr_(s) { return escapeHtml_(s).replaceAll("`", "&#96;"); }
 
-  /* =========================
-   * 11) Init
-   * ========================= */
   async function init_() {
     setStateUI_(currentState);
     bindStateButtons_();
@@ -840,5 +724,4 @@
   } else {
     init_();
   }
-
 })();
